@@ -1,0 +1,10 @@
+# Blueprint do Render: cria o serviço que hospeda o jogo + servidor online.
+services:
+  - type: web
+    name: batalha-naval
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
