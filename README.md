@@ -1,4 +1,4 @@
-# ⚓ Batalha Naval — v1.5.1
+# ⚓ Batalha Naval — v1.6
 
 Monte seu navio **peça por peça** numa grade (casco, armas, motores, aletas, sensores…) e lute contra ondas de inimigos
 ou contra outros jogadores **online**. Funciona no computador e no **celular** (instalável como app).
@@ -12,13 +12,16 @@ ou contra outros jogadores **online**. Funciona no computador e no **celular** (
 | **Online** | Direto pelo GitHub Pages, entre navegadores (P2P). Veja *Modo online*. |
 
 ### Controles
-- **Computador:** `W/S` acelera/ré · `A/D` gira · mouse mira · botão esquerdo = canhões e morteiros · `Espaço`/botão direito = torpedos e mísseis · `P` pausa · `M` som.
-- **Celular:** joystick esquerdo move (o navio aponta para onde você empurra) · joystick direito mira e atira (quanto mais longe, maior o alcance do morteiro) · botão 🚀 = torpedos/mísseis · ❚❚ pausa. Gire para **paisagem**.
+- **Computador:** `W/S` acelera/ré · `A/D` gira · mouse mira · botão esquerdo = canhões, morteiros e cargas de profundidade · `Espaço`/botão direito = torpedos e mísseis · `V` mergulhar/emergir (submarino) · `F` minas · `−`/`+` ou roda do mouse = zoom · `P` pausa · `M` som.
+- **Celular:** joystick esquerdo move (o navio aponta para onde você empurra) · joystick direito mira e atira (quanto mais longe, maior o alcance do morteiro) · botão 🚀 = torpedos/mísseis · ⬇ mergulhar e 💣 minas (aparecem só com as peças) · ❚❚ pausa. Gire para **paisagem**.
 
 ## O que tem
 - **Estaleiro em grade** 13×17: casco (leve, comum, reforçado, reativo, pesado, **furtivo**), pontes, aletas laterais/traseiras, canhões, morteiros, metralhadoras (comum, pesada, giratória, lança-chamas), torpedos, mísseis guiados, motores, escudo, defesa pontual, reparo, **radar, sonares, gerador furtivo, bloqueador, carregador e computador de tiro**.
 - **Dano por peça**: cada quadrado tem vida; tiros destroem armas antes do casco, e partes desconectadas da ponte se soltam.
-- **Campanha** em ondas com 16 modelos de inimigos (incluindo um chefe) e moedas que aumentam o orçamento.
+- **Campanha** em ondas com 20 modelos de inimigos (incluindo um chefe) e moedas que aumentam o orçamento.
+- **Submarinos (v1.6):** troque a ponte pela **Torre Submarina**. Mergulhe (`V`): você some da vista, só leva torpedos/minas/cargas e só atira torpedos e minas; a bateria acaba e você emerge. Peças: periscópio, lastro, bateria, minas, cargas de profundidade, motor elétrico silencioso, reator nuclear.
+- **Bots configuráveis (v1.6):** dificuldade, quantidade, modelos permitidos, *escaramuça* offline e **bots nas salas online** (o anfitrião adiciona; rodam no navegador dele).
+- **Zoom (v1.6):** ⚙ Opções (35%–160%) ou roda do mouse / `−` `+` na batalha.
 - **Visão e furtividade (v1.5):**
   - Você só enxerga até certa distância (650, +300 por radar, até 2). O resto fica na névoa.
   - **Sonar Passivo** (850) e **Sonar Ativo** (1500, pulsa a cada 4 s mas denuncia você a 2200) mostram contatos na névoa.
@@ -32,6 +35,7 @@ O online funciona **só com o GitHub Pages**: a partida roda direto entre os nav
 1. Um jogador abre **🌐 Jogar online → Criar sala** (vira o anfitrião) e recebe um **código de 4 letras**.
 2. Os outros abrem o jogo, vão em **Jogar online**, digitam o código — ou abrem o **link de convite** (`…/?sala=CODIGO`, botão *Copiar link* no lobby).
 3. Cada um monta o navio no Estaleiro (o orçamento da sala é validado pelo anfitrião), clica **Estou pronto** e o anfitrião **inicia**.
+4. O anfitrião pode **adicionar bots** no lobby (modelo, dificuldade e equipe); eles rodam no navegador dele e contam no placar.
 
 Dicas e limites:
 - O anfitrião precisa **manter a página aberta e em primeiro plano** (no celular, não bloquear a tela). O melhor aparelho/conexão deve ser o anfitrião.

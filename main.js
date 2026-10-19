@@ -79,7 +79,68 @@ function startCampaign() {
   if (!r.ok) return;
   UI.show('battle');
   Touch.show(true);
-  Battle.start(Builder.getDesign(), 1);
+  Battle.start(Builder.getDesign(), Meta.bots.startWave || 1);
+}
+
+/* ---------------------------------------------------------------- janela de Bots */
+const DIFF_DESC = {
+  facil: 'Erram bastante, recarregam devagar e enxergam menos longe.',
+  normal: 'Ficam mais fortes a cada onda (padrão da campanha).',
+  dificil: 'Miram bem e recarregam no tempo normal.',
+  mestre: 'Quase não erram, recarregam mais rápido e enxergam mais longe.',
+};
+function openBots() {
+  const B = Meta.bots, modal = $('modal-bots');
+  const pool = PRESETS.map(p => ({ id: p.id, name: p.name, power: p.power })).concat([{ id: 'meu', name: 'Clone do meu navio', power: 0 }]);
+  $('bots-diff').innerHTML = Object.keys(BOT_DIFFS).map(k => `<option value="${k}">${BOT_DIFFS[k].name}</option>`).join('');
+  $('bots-diff').value = B.diff; $('bots-mult').value = String(B.mult);
+  $('bots-wave').innerHTML = Array.from({ length: 20 }, (_, i) => `<option value="${i + 1}">${i + 1}</option>`).join('');
+  $('bots-wave').value = String(B.startWave);
+  const showDesc = () => { $('bots-diff-desc').textContent = DIFF_DESC[B.diff] || ''; };
+  const sum = () => {
+    const tot = Object.values(B.skirmish).reduce((a, b) => a + b, 0);
+    $('bots-sum').textContent = tot ? `Escaramuça: ${tot} bot(s) · ${BOT_DIFFS[B.diff].name}` : 'Escaramuça: adicione ao menos 1 bot.';
+    $('bots-skirm-start').disabled = !tot;
+  };
+  const buildAllowed = () => {
+    $('bots-allowed').innerHTML = pool.map(p => `<label class="chk"><input type="checkbox" data-id="${p.id}" ${!B.allowed || B.allowed.includes(p.id) ? 'checked' : ''}> ${p.name} ${p.power ? `<small>poder ${p.power}</small>` : ''}</label>`).join('');
+    $('bots-allowed').querySelectorAll('input').forEach(i => i.onchange = () => {
+      const ids = [...$('bots-allowed').querySelectorAll('input:checked')].map(x => x.dataset.id);
+      B.allowed = ids.length === pool.length ? null : ids; Meta.save();
+    });
+  };
+  const buildSkirm = () => {
+    $('bots-skirm').innerHTML = pool.map(p => `<div class="step"><span>${p.name}</span><button data-id="${p.id}" data-d="-1">−</button><b>${B.skirmish[p.id] || 0}</b><button data-id="${p.id}" data-d="1">+</button></div>`).join('');
+    $('bots-skirm').querySelectorAll('button').forEach(b => b.onclick = () => {
+      const v = clamp((B.skirmish[b.dataset.id] || 0) + (+b.dataset.d), 0, 6);
+      if (v) B.skirmish[b.dataset.id] = v; else delete B.skirmish[b.dataset.id];
+      Meta.save(); buildSkirm(); sum();
+    });
+  };
+  $('bots-diff').onchange = () => { B.diff = $('bots-diff').value; Meta.save(); showDesc(); sum(); };
+  $('bots-mult').onchange = () => { B.mult = +$('bots-mult').value; Meta.save(); };
+  $('bots-wave').onchange = () => { B.startWave = +$('bots-wave').value; Meta.save(); };
+  $('bots-all').onclick = () => { B.allowed = null; Meta.save(); buildAllowed(); };
+  $('bots-none').onclick = () => { B.allowed = []; Meta.save(); buildAllowed(); };
+  $('bots-close').onclick = () => modal.classList.add('hidden');
+  $('bots-skirm-start').onclick = () => {
+    const r = Builder.analyze();
+    if (!r.ok) { alert('Corrija o navio antes de lutar:\n' + r.errors.join('\n')); return; }
+    modal.classList.add('hidden'); UI.show('battle'); Touch.show(true);
+    Battle.start(Builder.getDesign(), 1, { counts: Object.assign({}, B.skirmish), diff: B.diff, wave: 6 });
+  };
+  showDesc(); buildAllowed(); buildSkirm(); sum();
+  modal.classList.remove('hidden');
+}
+
+function openOpts() {
+  const modal = $('modal-opts'), rng = $('zoom-range');
+  const cur = () => Meta.zoom || (window.innerWidth < 900 ? 0.75 : 1);
+  const show = () => { rng.value = Math.round(cur() * 100); $('zoom-val').textContent = Math.round(cur() * 100) + '%'; };
+  rng.oninput = () => { Meta.zoom = rng.value / 100; Meta.save(); $('zoom-val').textContent = rng.value + '%'; };
+  $('zoom-reset').onclick = () => { Meta.zoom = 0; Meta.save(); show(); };
+  $('opts-close').onclick = () => modal.classList.add('hidden');
+  show(); modal.classList.remove('hidden');
 }
 
 window.addEventListener('DOMContentLoaded', () => {
@@ -92,6 +153,8 @@ window.addEventListener('DOMContentLoaded', () => {
   refreshHeader();
   $('btn-battle').onclick = startCampaign;
   $('btn-online').onclick = () => Online.show();
+  $('btn-bots').onclick = openBots;
+  $('btn-opts').onclick = openOpts;
   $('btn-reset').onclick = () => {
     const msg = ['Resetar o jogo?', '', 'Isso apaga suas moedas, o recorde de ondas e o navio salvo, e volta ao navio inicial. Não dá para desfazer.'];
     if (!confirm(msg.join('\n'))) return;

@@ -9,11 +9,19 @@
    A proa (frente) do navio aponta para CIMA da grade.
    ===================================================================== */
 
-const VERSION = '1.5.1';
+const VERSION = '1.6.0';
 const GRID_W = 13;
 const GRID_H = 17;
 const BASE_BUDGET = 220;
 const TAU = Math.PI * 2;
+
+/* Dificuldades dos bots. null = escala com a onda (comportamento padrão da campanha). */
+const BOT_DIFFS = {
+  facil:   { name: 'Fácil',   inacc: 0.22,  reload: 1.7,  gate: 1.4, vis: 0.8 },
+  normal:  { name: 'Normal',  inacc: null,  reload: null, gate: 1,   vis: 1 },
+  dificil: { name: 'Difícil', inacc: 0.06,  reload: 1.0,  gate: 0.8, vis: 1 },
+  mestre:  { name: 'Mestre',  inacc: 0.025, reload: 0.85, gate: 0.6, vis: 1.15 },
+};
 
 /* Visão: alcance normal, furtividade total a partir de STEALTH_FULL de cobertura,
    e distância em que qualquer navio é percebido a olho nu (REVEAL_NEAR). */
@@ -21,9 +29,10 @@ const VISION_BASE = 650;
 const STEALTH_FULL = 0.6;
 const REVEAL_NEAR = 170;
 
-const HULL_CODES = new Set(['#', '=', 'o', '@', '%', 's', 'B', 'b']);
+const HULL_CODES = new Set(['#', '=', 'o', '@', '%', 's', 'B', 'b', 'U']);
 const isHull = c => HULL_CODES.has(c);
-const isBridge = c => c === 'B' || c === 'b';
+const isBridge = c => c === 'B' || c === 'b' || c === 'U';
+const DEEP = 0.6;                                   // profundidade (0..1) a partir da qual o submarino está submerso
 const isFin = c => c === '<' || c === '>' || c === 'v';
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 /** diferença de ângulo a-b normalizada para [-PI, PI] */
@@ -44,7 +53,9 @@ const PARTS = {
   's': { layer: 'hull', name: 'Casco Furtivo', cost: 8, hp: 6, mass: 1.1, soak: 0.1, stealth: 1,
     desc: 'Casco absorvedor de radar e ruído. Com cobertura furtiva suficiente (60% do casco) o navio some do mapa, do sonar e dos mísseis.' },
   'B': { layer: 'hull', name: 'Ponte de Comando', cost: 10, hp: 16, mass: 1.5, soak: 0,
-    desc: 'Obrigatória (só pode haver uma ponte). Se for destruída, o navio afunda. Proteja-a no meio do casco!' },
+    desc: 'Obrigatória (só pode haver uma ponte). Se for destruída, o navio afunda. Proteja-a no meio do casco! Troque por uma Torre Submarina para criar um submarino.' },
+  'U': { layer: 'hull', name: 'Torre Submarina', cost: 32, hp: 22, mass: 2.2, soak: 0.3, sub: true,
+    desc: 'Troque a ponte por esta torre e o navio vira SUBMARINO: tecla V (ou botão ⬇) mergulha. Submerso ele some da vista, só leva torpedos/minas/cargas e só atira torpedos e minas. Gasta bateria (recarrega na superfície).' },
   'b': { layer: 'hull', name: 'Ponte Blindada', cost: 22, hp: 34, mass: 3, soak: 0.4,
     desc: 'Ponte de Comando com blindagem de combate: muito mais resistente. Conta como a ponte (só uma por navio).' },
 
@@ -87,6 +98,18 @@ const PARTS = {
   't': { layer: 'top', kind: 'torp', name: 'Torpedo', cost: 18, hp: 2, mass: 1.2,
     dmg: 9, reload: 3.5, speed: 230, range: 700, splash: 36,
     desc: 'Dispara reto para a proa. Lento, mas explode em área com dano enorme. (Espaço ou botão direito)' },
+  'a': { layer: 'top', kind: 'torp', name: 'Torpedo Guiado', cost: 30, hp: 2, mass: 1.5,
+    dmg: 8, reload: 5, speed: 210, range: 850, splash: 34, turn: 1.5, shots: 1,
+    desc: 'Procura o inimigo mais próximo do cursor (precisa estar detectado). Mais lento, mas curva. O Bloqueador e a Defesa Pontual atrapalham. (Espaço ou botão direito)' },
+  'i': { layer: 'top', kind: 'torp', name: 'Torpedo Pesado', cost: 34, hp: 3, mass: 2.4,
+    dmg: 16, reload: 6.5, speed: 170, range: 650, splash: 50, shots: 1,
+    desc: 'Ogiva enorme com explosão grande. Lento e recarrega devagar. (Espaço ou botão direito)' },
+  'l': { layer: 'top', kind: 'torp', name: 'Torpedo Supercavitante', cost: 26, hp: 2, mass: 1.2,
+    dmg: 6, reload: 3, speed: 430, range: 800, splash: 28, shots: 1,
+    desc: 'Velocidade altíssima: difícil de desviar. Dano menor. (Espaço ou botão direito)' },
+  'y': { layer: 'top', kind: 'torp', name: 'Salva Tripla', cost: 42, hp: 3, mass: 2,
+    dmg: 7, reload: 5.5, speed: 230, range: 700, splash: 32, shots: 3, spread: 0.14,
+    desc: 'Dispara 3 torpedos em leque de uma vez. Ótimo contra alvos que desviam. (Espaço ou botão direito)' },
   'u': { layer: 'top', kind: 'missile', name: 'Míssil Guiado', cost: 32, hp: 2, mass: 1.6,
     dmg: 7, reload: 4.5, speed: 250, range: 800, splash: 30, turn: 2.4,
     desc: 'Sai para a proa e persegue o inimigo mais perto do cursor. Pode ser derrubado por defesa pontual. (Espaço ou botão direito)' },
@@ -95,6 +118,14 @@ const PARTS = {
     desc: 'Empurra o navio para frente. Coloque na popa, sobre o casco. Quanto mais motores, mais rápido.' },
   'E': { layer: 'top', kind: 'engine', name: 'Motor Turbo', cost: 24, hp: 3, mass: 2, thrust: 115,
     desc: 'Motor potente (o dobro de força). Ideal para navios grandes e pesados.' },
+  'V': { layer: 'top', kind: 'engine', name: 'Motor Elétrico', cost: 22, hp: 3, mass: 1.6, thrust: 62, electric: true, silent: true,
+    desc: 'Silencioso (o sonar passivo só ouve de perto) e rende 100% mesmo submerso. Os motores a diesel perdem 45% da força submersos.' },
+  'T': { layer: 'top', kind: 'engine', name: 'Turbina a Gás', cost: 36, hp: 3, mass: 2.4, thrust: 150,
+    desc: 'Muita força para pouco peso. Barulhenta e com chama azul.' },
+  'j': { layer: 'top', kind: 'engine', name: 'Hidrojato', cost: 20, hp: 3, mass: 1.5, thrust: 85, turnBonus: 0.12,
+    desc: 'Jato de água: força média e ainda ajuda o navio a virar mais rápido.' },
+  'K': { layer: 'top', kind: 'engine', name: 'Reator Nuclear', cost: 95, hp: 6, mass: 6, thrust: 380, electric: true, nuclear: true,
+    desc: 'Potência enorme, rende 100% submerso e dá bateria infinita ao submarino. Pesado e caríssimo.' },
   'W': { layer: 'top', kind: 'engine', name: 'Motor Pesado', cost: 48, hp: 5, mass: 3.2, thrust: 230,
     desc: 'Dois bocais, força enorme: para encouraçados e blindados que precisam sair do lugar.' },
   'p': { layer: 'top', kind: 'thruster', name: 'Propulsor Lateral', cost: 9, hp: 2, mass: 0.7, turnBonus: 0.3,
@@ -103,6 +134,18 @@ const PARTS = {
     desc: 'Campo de energia: absorve 22 pontos de dano de qualquer tipo e recarrega depois de 3 s sem apanhar. Vários somam.' },
   'D': { layer: 'top', kind: 'pd', name: 'Defesa Pontual', cost: 26, hp: 2, mass: 1.2, range: 190, reload: 0.5,
     desc: 'Torre automática que derruba mísseis, torpedos e granadas de morteiro que se aproximam.' },
+  'w': { layer: 'top', kind: 'periscope', name: 'Periscópio', cost: 18, hp: 2, mass: 0.6, vision: 650,
+    desc: 'Submerso você enxerga só 350. Com um periscópio a visão submersa volta a 650.' },
+  'n': { layer: 'top', kind: 'ballast', name: 'Tanque de Lastro', cost: 20, hp: 3, mass: 1.5,
+    desc: 'Mergulha e emerge 50% mais rápido (até 2 tanques).' },
+  'z': { layer: 'top', kind: 'battery', name: 'Bateria Extra', cost: 22, hp: 3, mass: 2,
+    desc: '+35 s de mergulho cada (até 3). A bateria base dura 60 s e recarrega na superfície.' },
+  'h': { layer: 'top', kind: 'mine', name: 'Lançador de Minas', cost: 26, hp: 2, mass: 1.4,
+    dmg: 14, reload: 5, splash: 52, arm: 3, life: 45,
+    desc: 'Solta uma mina atrás do navio (tecla F ou botão 💣). Fica parada, invisível ao inimigo, e explode em quem encostar. Pega até submarinos.' },
+  'g': { layer: 'top', kind: 'depth', name: 'Cargas de Profundidade', cost: 28, hp: 2, mass: 1.4,
+    dmg: 14, dmgSurf: 4, reload: 3.5, speed: 200, range: 380, minRange: 40, splash: 64,
+    desc: 'Lança cargas no ponto do cursor que explodem no fundo: devastadoras contra submarinos submersos, fracas contra navios. (Botão esquerdo)' },
   'A': { layer: 'top', kind: 'radar', name: 'Radar', cost: 22, hp: 2, mass: 1, bonus: 300,
     desc: 'Aumenta o alcance de visão normal em 300 (até 2 radares). Não enxerga navios furtivos.' },
   'S': { layer: 'top', kind: 'sonar', name: 'Sonar Passivo', cost: 28, hp: 2, mass: 1.2, range: 850,
@@ -131,6 +174,7 @@ const TOOLS = [
   { key: 's', part: 's', group: 'Casco' },
   { key: 'B', part: 'B', group: 'Ponte' },
   { key: 'b', part: 'b', group: 'Ponte' },
+  { key: 'U', part: 'U', group: 'Ponte' },
   { key: 'L', part: '<', group: 'Aletas' },
   { key: 'v', part: 'v', group: 'Aletas' },
   { key: 'c', part: 'c', group: 'Canhões' },
@@ -144,11 +188,24 @@ const TOOLS = [
   { key: 'k', part: 'k', group: 'Metralhadoras' },
   { key: 'f', part: 'f', group: 'Metralhadoras' },
   { key: 't', part: 't', group: 'Torpedos e mísseis' },
+  { key: 'a', part: 'a', group: 'Torpedos e mísseis' },
+  { key: 'i', part: 'i', group: 'Torpedos e mísseis' },
+  { key: 'l', part: 'l', group: 'Torpedos e mísseis' },
+  { key: 'y', part: 'y', group: 'Torpedos e mísseis' },
   { key: 'u', part: 'u', group: 'Torpedos e mísseis' },
   { key: 'e', part: 'e', group: 'Propulsão' },
   { key: 'E', part: 'E', group: 'Propulsão' },
   { key: 'W', part: 'W', group: 'Propulsão' },
+  { key: 'T', part: 'T', group: 'Propulsão' },
+  { key: 'j', part: 'j', group: 'Propulsão' },
+  { key: 'V', part: 'V', group: 'Propulsão' },
+  { key: 'K', part: 'K', group: 'Propulsão' },
   { key: 'p', part: 'p', group: 'Propulsão' },
+  { key: 'w', part: 'w', group: 'Submarino' },
+  { key: 'n', part: 'n', group: 'Submarino' },
+  { key: 'z', part: 'z', group: 'Submarino' },
+  { key: 'h', part: 'h', group: 'Submarino' },
+  { key: 'g', part: 'g', group: 'Submarino' },
   { key: 'A', part: 'A', group: 'Sensores e furtividade' },
   { key: 'S', part: 'S', group: 'Sensores e furtividade' },
   { key: 'Y', part: 'Y', group: 'Sensores e furtividade' },
@@ -172,12 +229,14 @@ function shipStats(cells) {
   const s = { mass: 0, hp: 0, cost: 0, thrust: 0, lat: 0, rear: 0, count: 0,
     cannons: 0, mortars: 0, mgs: 0, torps: 0, missiles: 0, engines: 0, repairs: 0,
     shields: 0, shield: 0, regen: 0, pd: 0, thrusters: 0, dps: 0,
-    radars: 0, sonars: 0, sonarR: 0, pings: 0, pingR: 0, jammers: 0, loaders: 0, fcs: 0, stealthW: 0, hullCount: 0 };
+    radars: 0, sonars: 0, sonarR: 0, pings: 0, pingR: 0, jammers: 0, loaders: 0, fcs: 0, stealthW: 0, hullCount: 0,
+    sub: false, periscopes: 0, ballast: 0, batteries: 0, mines: 0, depths: 0, thrustSub: 0, silentThrust: 0, nuclear: false, turnBonus: 0 };
   for (const c of cells) {
     const b = PARTS[c.base];
     s.mass += b.mass; s.hp += b.hp; s.cost += b.cost; s.count++;
     if (b.fin === 'lateral') s.lat++; else if (b.fin === 'rear') s.rear++;
     if (isHull(c.base)) { s.hullCount++; s.stealthW += b.stealth || 0; }
+    if (b.sub) s.sub = true;
     if (!c.top) continue;
     const t = PARTS[c.top];
     s.mass += t.mass; s.hp += t.hp; s.cost += t.cost;
@@ -197,15 +256,25 @@ function shipStats(cells) {
       case 'jammer': s.jammers++; break;
       case 'loader': s.loaders++; break;
       case 'fcs': s.fcs++; break;
-      case 'engine': s.engines++; s.thrust += t.thrust; break;
+      case 'engine':
+        s.engines++; s.thrust += t.thrust; s.thrustSub += t.thrust * (t.electric ? 1 : 0.55);
+        if (t.silent) s.silentThrust += t.thrust;
+        if (t.nuclear) s.nuclear = true;
+        s.turnBonus += t.turnBonus || 0;
+        break;
+      case 'periscope': s.periscopes++; break;
+      case 'ballast': s.ballast++; break;
+      case 'battery': s.batteries++; break;
+      case 'mine': s.mines++; s.dps += t.dmg / t.reload * 0.4; break;
+      case 'depth': s.depths++; s.dps += t.dmg / t.reload * 0.3; break;
       case 'repair': s.repairs++; break;
     }
   }
   const m = Math.max(s.mass, 1);
-  s.weapons = s.cannons + s.mortars + s.mgs + s.torps + s.missiles;
+  s.weapons = s.cannons + s.mortars + s.mgs + s.torps + s.missiles + s.mines + s.depths;
   s.maxSpeed = Math.min(300, s.thrust / m * 45);          // px/s
   s.accel = s.maxSpeed * 0.25;                             // arrasto longitudinal = 0.25/s
-  s.turn = (0.55 + 0.28 * s.lat + 0.5 * s.rear + 0.3 * s.thrusters) * clamp(Math.sqrt(25 / m), 0.45, 1.4); // rad/s
+  s.turn = (0.55 + 0.28 * s.lat + 0.5 * s.rear + 0.3 * s.thrusters + s.turnBonus) * clamp(Math.sqrt(25 / m), 0.45, 1.4); // rad/s
   s.grip = 0.6 + 0.9 * s.lat + 0.4 * s.rear;               // resistência à derrapagem
   // visão, sensores e furtividade
   s.vision = VISION_BASE + 300 * Math.min(2, s.radars);
@@ -214,6 +283,12 @@ function shipStats(cells) {
   s.loadMul = Math.pow(0.85, Math.min(2, s.loaders));
   s.turnMul = 1 + 0.25 * Math.min(2, s.fcs);
   s.scatterMul = 1 - 0.3 * Math.min(2, s.fcs);
+  // submarino: velocidade submersa, bateria, mergulho e ruído
+  s.maxSpeedSub = Math.min(300, s.thrustSub / m * 45);
+  s.accelSub = s.maxSpeedSub * 0.25;
+  s.battery = s.sub ? 60 + 35 * Math.min(3, s.batteries) : 0;
+  s.diveMul = 1 + 0.5 * Math.min(2, s.ballast);
+  s.quiet = s.thrust ? 1 - 0.5 * (s.silentThrust / s.thrust) : 1;   // 1 = barulhento; o sonar passivo ouve menos longe quanto menor
   return s;
 }
 
@@ -222,11 +297,12 @@ function shipStats(cells) {
     Compartilhada entre o cliente e o servidor (o servidor só envia quem você pode ver). */
 function detects(o, t) {
   const d = Math.hypot(t.x - o.x, t.y - o.y);
-  if (d < REVEAL_NEAR) return true;                       // a olho nu, colado
+  if (d < (t.sub ? 110 : REVEAL_NEAR)) return true;       // a olho nu, colado (submerso: bem mais perto)
   if (t.reveal && d < t.revealR) return true;             // acabou de atirar ou emitir pulso
   const sig = t.sig;
-  if (d < o.vision * sig) return true;                    // visão normal
-  if (o.sonar && d < o.sonar * sig) return true;          // sonar passivo
+  if (!t.sub && d < o.vision * sig) return true;          // visão normal (submarino submerso não aparece)
+  const q = t.quiet === undefined ? 1 : t.quiet;          // navio silencioso/parado é mais difícil de ouvir
+  if (o.sonar && d < o.sonar * sig * q) return true;      // sonar passivo
   if (o.ping && d < o.pingR * sig) return true;           // pulso do sonar ativo
   return false;
 }
@@ -657,19 +733,124 @@ const PRESETS = [
     '  e  ',
     '     ',
   ]) },
+
+  { id: 'submarino', name: 'Submarino', power: 3, minWave: 4, role: 'Mergulha (tecla V): some da vista, ataca com torpedos.', design: makeDesign([
+    '  #  ',
+    ' ### ',
+    ' ### ',
+    ' #U# ',
+    '<###>',
+    ' ### ',
+    ' ### ',
+    '  #  ',
+    '  v  ',
+  ], [
+    '  t  ',
+    ' t t ',
+    '  w  ',
+    '     ',
+    '  z  ',
+    ' V V ',
+    '  n  ',
+    '  V  ',
+    '     ',
+  ]) },
+  { id: 'minador', name: 'Submarino Minador', power: 4, minWave: 6, role: 'Torpedo guiado, minas e periscópio.', design: makeDesign([
+    '  #  ',
+    ' ### ',
+    ' #U# ',
+    '<###>',
+    ' ### ',
+    ' ### ',
+    ' ### ',
+    '  #  ',
+    '  v  ',
+  ], [
+    '  t  ',
+    '  a  ',
+    '     ',
+    '  w  ',
+    '  h  ',
+    ' z z ',
+    ' V V ',
+    '  V  ',
+    '     ',
+  ]) },
+  { id: 'cacasub', name: 'Caça-submarinos', power: 4, minWave: 5, role: 'Escolta com sonar ativo e cargas de profundidade.', design: makeDesign([
+    '   #   ',
+    '  ###  ',
+    '  ###  ',
+    ' ##B## ',
+    '<#####>',
+    ' ##### ',
+    ' ##### ',
+    '  ###  ',
+    '  ###  ',
+    '  v v  ',
+  ], [
+    '   m   ',
+    '   c   ',
+    '       ',
+    '       ',
+    '  Y S  ',
+    '  g g  ',
+    '   g   ',
+    '       ',
+    '  eEe  ',
+    '       ',
+  ]) },
+  { id: 'nuclear', name: 'Submarino Nuclear', power: 8, minWave: 9, role: 'Reator, torpedos guiados e pesados, sonar e bateria infinita.', design: makeDesign([
+    '   #   ',
+    '  ###  ',
+    '  ###  ',
+    '  ###  ',
+    ' ##U## ',
+    '<#####>',
+    ' ##### ',
+    ' ##### ',
+    ' ##### ',
+    '  ###  ',
+    '  ###  ',
+    '   #   ',
+    '   v   ',
+  ], [
+    '   a   ',
+    '  a a  ',
+    '   w   ',
+    '  i i  ',
+    '       ',
+    '  S Y  ',
+    '  z z  ',
+    '   z   ',
+    '  n n  ',
+    '   K   ',
+    '   V   ',
+    '   V   ',
+    '       ',
+  ]) },
 ];
 
 PRESETS.sort((a, b) => a.power - b.power);
 
 /* --------------------------------------------------------------- progresso */
 const Meta = {
-  coins: 0, best: 0, design: null, name: '', server: '',
+  coins: 0, best: 0, design: null, name: '', server: '', zoom: 0,
+  bots: { diff: 'normal', mult: 1, allowed: null, startWave: 1, skirmish: {} },
   budget() { return BASE_BUDGET + this.coins; },
   load() {
     try {
       const j = JSON.parse(localStorage.getItem('batalhaNaval.v1') || '{}');
       this.coins = j.coins | 0; this.best = j.best | 0;
       this.name = typeof j.name === 'string' ? j.name : ''; this.server = typeof j.server === 'string' ? j.server : '';
+      this.zoom = +j.zoom > 0 ? Math.min(1.6, Math.max(0.35, +j.zoom)) : 0;
+      if (j.bots && typeof j.bots === 'object') {
+        const b = j.bots;
+        if (BOT_DIFFS[b.diff]) this.bots.diff = b.diff;
+        if (+b.mult >= 0.25 && +b.mult <= 4) this.bots.mult = +b.mult;
+        if (Array.isArray(b.allowed)) this.bots.allowed = b.allowed.filter(x => typeof x === 'string').slice(0, 60);
+        if (+b.startWave >= 1 && +b.startWave <= 30) this.bots.startWave = +b.startWave | 0;
+        if (b.skirmish && typeof b.skirmish === 'object') this.bots.skirmish = b.skirmish;
+      }
       if (j.design && j.design.hull && j.design.top) this.design = j.design;
     } catch (e) { /* sem storage: segue sem salvar */ }
   },
@@ -679,7 +860,7 @@ const Meta = {
   },
   save() {
     try {
-      localStorage.setItem('batalhaNaval.v1', JSON.stringify({ coins: this.coins, best: this.best, design: this.design, name: this.name, server: this.server }));
+      localStorage.setItem('batalhaNaval.v1', JSON.stringify({ coins: this.coins, best: this.best, design: this.design, name: this.name, server: this.server, zoom: this.zoom, bots: this.bots }));
     } catch (e) { /* ignore */ }
   },
 };
@@ -762,6 +943,16 @@ function drawBase(ctx, code, cs, o = {}) {
       ctx.fillStyle = '#c08a55';
       for (const sx of [-h + 2.5, 1]) for (const sy of [-h + 2.5, 1]) ctx.fillRect(sx, sy, h - 3.5, h - 3.5);
       break;
+    case 'U': {
+      ctx.fillStyle = '#0b1b26'; ctx.fillRect(-h, -h, cs, cs);
+      ctx.fillStyle = '#31505f'; ctx.fillRect(-h + 1.5, -h + 1.5, cs - 3, cs - 3);
+      ctx.fillStyle = '#486d80'; ctx.beginPath(); ctx.ellipse(0, 0, cs * 0.34, cs * 0.4, 0, 0, TAU); ctx.fill();
+      ctx.strokeStyle = '#1a2f3b'; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.fillStyle = '#9fb8c4'; ctx.beginPath(); ctx.arc(0, cs * 0.06, cs * 0.12, 0, TAU); ctx.fill();
+      ctx.strokeStyle = '#d6e2e8'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(0, -cs * 0.05); ctx.lineTo(0, -cs * 0.3); ctx.stroke();
+      ctx.fillStyle = '#d6e2e8'; ctx.fillRect(-2, -cs * 0.34, 4, 3);
+      break;
+    }
     case 'B': case 'b': {
       const arm = code === 'b';
       ctx.fillStyle = arm ? '#161e29' : '#33475d'; ctx.fillRect(-h, -h, cs, cs);
@@ -798,13 +989,14 @@ function drawBase(ctx, code, cs, o = {}) {
 
 /** chama de motor (desenhada ANTES do casco, para ficar por baixo dele) */
 function drawFlame(ctx, code, cs, f, time) {
-  if (f < 0.03) return;
-  const turbo = code === 'E' || code === 'W', twin = code === 'W';
-  const len = cs * (0.35 + f * (turbo ? 1.5 : 1.0)) + Math.sin(time * 40 + cs) * cs * 0.07 * f;
-  const y0 = cs * 0.42, w = cs * (twin ? 0.14 : turbo ? 0.26 : 0.2);
+  if (f < 0.03 || code === 'V') return;                   // motor elétrico: sem chama
+  const turbo = code === 'E' || code === 'W' || code === 'T', twin = code === 'W', nuke = code === 'K', jet = code === 'j';
+  const len = cs * (0.35 + f * (turbo ? 1.5 : nuke ? 1.8 : 1.0)) * (jet ? 0.7 : 1) + Math.sin(time * 40 + cs) * cs * 0.07 * f;
+  const y0 = cs * 0.42, w = cs * (twin ? 0.14 : (turbo || nuke) ? 0.26 : 0.2);
   for (const ox of (twin ? [-cs * 0.2, cs * 0.2] : [0])) {
     const g = ctx.createLinearGradient(0, y0, 0, y0 + len);
-    if (turbo) { g.addColorStop(0, '#ffffff'); g.addColorStop(0.35, '#7fd4ff'); g.addColorStop(1, 'rgba(40,120,255,0)'); }
+    if (nuke) { g.addColorStop(0, '#ffffff'); g.addColorStop(0.3, '#8dffb0'); g.addColorStop(1, 'rgba(40,255,140,0)'); }
+    else if (turbo || jet) { g.addColorStop(0, '#ffffff'); g.addColorStop(0.35, '#7fd4ff'); g.addColorStop(1, 'rgba(40,120,255,0)'); }
     else { g.addColorStop(0, '#fff3b0'); g.addColorStop(0.4, '#ff8a1f'); g.addColorStop(1, 'rgba(255,60,0,0)'); }
     poly(ctx, [[ox - w, y0], [ox + w, y0], [ox, y0 + len]]);
     ctx.fillStyle = g; ctx.fill();
@@ -1006,6 +1198,75 @@ function drawTop(ctx, code, cs, o = {}) {
       ctx.fillStyle = '#122418'; ctx.fill(); ctx.strokeStyle = '#7bd86a'; ctx.lineWidth = 1.4; ctx.stroke();
       ctx.beginPath(); ctx.arc(0, 0, cs * 0.14, 0, TAU); ctx.moveTo(-cs * 0.24, 0); ctx.lineTo(cs * 0.24, 0); ctx.moveTo(0, -cs * 0.24); ctx.lineTo(0, cs * 0.24); ctx.stroke();
       break;
+    case 'V': {
+      rr(ctx, -cs * 0.34, -cs * 0.34, cs * 0.68, cs * 0.52, cs * 0.08);
+      ctx.fillStyle = '#17323d'; ctx.fill(); ctx.strokeStyle = '#4cc9ff'; ctx.lineWidth = 1.4; ctx.stroke();
+      ctx.strokeStyle = 'rgba(120,230,255,.8)'; ctx.lineWidth = 1.2;
+      for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.arc(0, -cs * 0.08, cs * (0.06 + i * 0.06), Math.PI * 0.15, Math.PI * 0.85); ctx.stroke(); }
+      poly(ctx, [[-cs * 0.16, cs * 0.18], [cs * 0.16, cs * 0.18], [cs * 0.22, cs * 0.4], [-cs * 0.22, cs * 0.4]]); ctx.fillStyle = '#10222b'; ctx.fill();
+      break;
+    }
+    case 'T': case 'j': case 'K': {
+      const kind = code;
+      const w = cs * (kind === 'K' ? 0.42 : 0.34);
+      ctx.fillStyle = kind === 'K' ? '#2b4a38' : kind === 'T' ? '#3b3f52' : '#2f4a5a'; ctx.strokeStyle = '#12171c'; ctx.lineWidth = 1.2;
+      ctx.fillRect(-w, -cs * 0.38, w * 2, cs * 0.56); ctx.strokeRect(-w, -cs * 0.38, w * 2, cs * 0.56);
+      if (kind === 'K') {
+        ctx.fillStyle = '#8dffb0'; ctx.beginPath(); ctx.arc(0, -cs * 0.1, cs * 0.16, 0, TAU); ctx.fill();
+        ctx.fillStyle = '#12301f'; ctx.beginPath(); ctx.arc(0, -cs * 0.1, cs * 0.07, 0, TAU); ctx.fill();
+        ctx.fillStyle = '#e3d23c'; ctx.fillRect(-w + 3, cs * 0.04, w * 2 - 6, cs * 0.06);
+      } else if (kind === 'T') {
+        ctx.fillStyle = '#9aa6c4'; ctx.beginPath(); ctx.arc(0, -cs * 0.12, cs * 0.2, 0, TAU); ctx.fill();
+        ctx.strokeStyle = '#3b3f52'; ctx.lineWidth = 1.5; for (let i = 0; i < 4; i++) { const a = i * Math.PI / 2 + Math.PI / 4; ctx.beginPath(); ctx.moveTo(0, -cs * 0.12); ctx.lineTo(Math.cos(a) * cs * 0.2, -cs * 0.12 + Math.sin(a) * cs * 0.2); ctx.stroke(); }
+      } else {
+        ctx.fillStyle = '#7fd4ff'; for (let i = 0; i < 3; i++) ctx.fillRect(-w + 3, -cs * 0.3 + i * cs * 0.1, w * 2 - 6, cs * 0.05);
+      }
+      poly(ctx, [[-cs * 0.2, cs * 0.18], [cs * 0.2, cs * 0.18], [cs * 0.27, cs * 0.42], [-cs * 0.27, cs * 0.42]]); ctx.fillStyle = '#171c22'; ctx.fill();
+      break;
+    }
+    case 'a': case 'i': case 'l': case 'y': {
+      ctx.fillStyle = '#2c3541'; ctx.fillRect(-cs * 0.4, -cs * 0.1, cs * 0.8, cs * 0.2);
+      const cfg = { a: [[0], '#4cc9ff', 0.2], i: [[0], '#a62b2b', 0.3], l: [[-0.2, 0.2], '#e9d23c', 0.14], y: [[-0.28, 0, 0.28], '#e8503a', 0.15] }[code];
+      for (const sx of cfg[0]) {
+        ctx.fillStyle = code === 'i' ? '#6b5555' : '#566474'; ctx.fillRect(sx * cs - cs * cfg[2] / 2, -cs * 0.44, cs * cfg[2], cs * 0.88);
+        ctx.fillStyle = cfg[1]; ctx.fillRect(sx * cs - cs * cfg[2] / 2, -cs * 0.44, cs * cfg[2], cs * 0.13);
+      }
+      if (code === 'a') { ctx.fillStyle = '#bff3ff'; ctx.beginPath(); ctx.arc(0, -cs * 0.05, cs * 0.05, 0, TAU); ctx.fill(); }
+      break;
+    }
+    case 'w':
+      ctx.strokeStyle = '#c9d6df'; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(0, cs * 0.1); ctx.lineTo(0, -cs * 0.28); ctx.lineTo(cs * 0.14, -cs * 0.28); ctx.stroke();
+      ctx.fillStyle = '#2c3a46'; ctx.strokeStyle = '#11181d'; ctx.lineWidth = 1.3; ctx.beginPath(); ctx.arc(0, cs * 0.12, cs * 0.2, 0, TAU); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#9fe8ff'; ctx.beginPath(); ctx.arc(cs * 0.14, -cs * 0.28, cs * 0.05, 0, TAU); ctx.fill();
+      break;
+    case 'n':
+      rr(ctx, -cs * 0.34, -cs * 0.3, cs * 0.68, cs * 0.6, cs * 0.22);
+      ctx.fillStyle = '#3d5568'; ctx.fill(); ctx.strokeStyle = '#142029'; ctx.lineWidth = 1.3; ctx.stroke();
+      ctx.strokeStyle = 'rgba(190,230,255,.7)'; ctx.lineWidth = 1.2;
+      for (let i = -1; i <= 1; i++) { ctx.beginPath(); ctx.moveTo(-cs * 0.2, i * cs * 0.13); ctx.quadraticCurveTo(-cs * 0.1, i * cs * 0.13 - 3, 0, i * cs * 0.13); ctx.quadraticCurveTo(cs * 0.1, i * cs * 0.13 + 3, cs * 0.2, i * cs * 0.13); ctx.stroke(); }
+      break;
+    case 'z':
+      rr(ctx, -cs * 0.3, -cs * 0.34, cs * 0.6, cs * 0.68, cs * 0.06);
+      ctx.fillStyle = '#1d3a28'; ctx.fill(); ctx.strokeStyle = '#7bd86a'; ctx.lineWidth = 1.4; ctx.stroke();
+      ctx.fillStyle = '#7bd86a'; ctx.fillRect(-cs * 0.12, -cs * 0.42, cs * 0.24, cs * 0.08);
+      poly(ctx, [[cs * 0.04, -cs * 0.24], [-cs * 0.12, cs * 0.04], [-cs * 0.01, cs * 0.04], [-cs * 0.05, cs * 0.26], [cs * 0.13, -cs * 0.06], [cs * 0.02, -cs * 0.06]]);
+      ctx.fillStyle = '#e9e36a'; ctx.fill();
+      break;
+    case 'h':
+      rr(ctx, -cs * 0.38, -cs * 0.3, cs * 0.76, cs * 0.6, cs * 0.06);
+      ctx.fillStyle = '#2a2f36'; ctx.fill(); ctx.strokeStyle = '#0f1216'; ctx.lineWidth = 1.2; ctx.stroke();
+      ctx.fillStyle = '#515b66'; ctx.strokeStyle = '#161a1f'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.arc(0, 0, cs * 0.2, 0, TAU); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = '#c0392b'; ctx.lineWidth = 2;
+      for (let i = 0; i < 8; i++) { const a = i * TAU / 8; ctx.beginPath(); ctx.moveTo(Math.cos(a) * cs * 0.2, Math.sin(a) * cs * 0.2); ctx.lineTo(Math.cos(a) * cs * 0.3, Math.sin(a) * cs * 0.3); ctx.stroke(); }
+      break;
+    case 'g':
+      ctx.fillStyle = '#2c3541'; ctx.fillRect(-cs * 0.4, -cs * 0.36, cs * 0.8, cs * 0.72);
+      for (const sy of [-0.17, 0.17]) {
+        ctx.fillStyle = '#4a5a3a'; ctx.strokeStyle = '#141a10'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.arc(0, sy * cs, cs * 0.14, 0, TAU); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = '#e3d23c'; ctx.fillRect(-cs * 0.14, sy * cs - 1, cs * 0.28, 2);
+      }
+      ctx.fillStyle = '#c0392b'; ctx.fillRect(-cs * 0.3, -cs * 0.36, cs * 0.6, cs * 0.06);
+      break;
     case 'r':
       rr(ctx, -cs * 0.34, -cs * 0.34, cs * 0.68, cs * 0.68, cs * 0.1);
       ctx.fillStyle = '#e9eeea'; ctx.fill(); ctx.strokeStyle = '#7d8f86'; ctx.lineWidth = 1.2; ctx.stroke();
@@ -1018,6 +1279,6 @@ function drawTop(ctx, code, cs, o = {}) {
 
 /* o servidor (Node) reaproveita as regras: peças, estatísticas, detecção e validação */
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { VERSION, GRID_W, GRID_H, BASE_BUDGET, VISION_BASE, REVEAL_NEAR, PARTS, PRESETS, shipStats, designCells,
+  module.exports = { BOT_DIFFS, VERSION, DEEP, GRID_W, GRID_H, BASE_BUDGET, VISION_BASE, REVEAL_NEAR, PARTS, PRESETS, shipStats, designCells,
     validateDesign, detects, isHull, isBridge, isFin, clamp };
 }

@@ -1,6 +1,6 @@
 {
   "name": "batalha-naval",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "description": "Batalha Naval: monte seu navio em grade e lute (campanha e online).",
   "private": true,
   "main": "server/server.js",

@@ -1,6 +1,6 @@
 'use strict';
 // Service worker do Batalha Naval: rede primeiro, cache como reserva (jogável offline na campanha).
-const CACHE = 'batalha-naval-v1.5.1';
+const CACHE = 'batalha-naval-v1.6.0';
 const FILES = ['./', 'index.html', 'style.css', 'parts.js', 'gameserver.js', 'builder.js', 'touch.js', 'battle.js', 'net.js', 'main.js', 'config.js', 'vendor/peerjs.min.js',
   'manifest.json', 'icons/icon-192.png', 'icons/icon-512.png'];
 

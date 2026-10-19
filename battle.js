@@ -87,12 +87,13 @@ class Ship {
     this.ox = sx / n; this.oy = sy / n;
     this.initialHull = n; this.maxHullHp = hp;
     this.cost = shipStats(all).cost;
-    this.input = { throttle: 0, steer: 0, aimX: x, aimY: y, fireMain: false, fireTorp: false, fireMissile: false };
+    this.input = { throttle: 0, steer: 0, aimX: x, aimY: y, fireMain: false, fireTorp: false, fireMissile: false, fireAux: false, dive: false };
     this.shield = 0; this.shieldHit = 0; this.shieldFlash = 0; this.label = '';
+    this.depth = 0; this.diveCmd = false; this.battery = 0; this.sub = false; this.quiet = 1; this.visMul = 1;
     this.ai = null; this.reloadMul = 1; this.smokeT = 0; this.wakeT = 0;
     this.ca = Math.cos(ang); this.sa = Math.sin(ang);
     this.refresh();
-    this.shield = this.shieldMax;
+    this.shield = this.shieldMax; this.battery = this.maxBattery;
   }
 
   refresh() {
@@ -117,8 +118,9 @@ class Ship {
     this.shieldMax = this.stats.shield;
     this.shield = Math.min(this.shield, this.shieldMax);
     // sensores e furtividade (os mesmos campos que detects() lê)
-    this.vision = this.stats.vision; this.sonar = this.stats.sonarR; this.pingR = this.stats.pingR;
+    this.vision = this.stats.vision * this.visMul; this.sonar = this.stats.sonarR; this.pingR = this.stats.pingR;
     this.sig = this.stats.sig; this.cover = this.stats.cover;
+    this.isSub = this.stats.sub; this.maxBattery = this.stats.battery; this.battery = Math.min(this.battery, this.maxBattery);
   }
 
   get rl() { return this.reloadMul * this.stats.loadMul; }
@@ -224,14 +226,17 @@ class Ship {
       return;
     }
 
+    if (this.isSub) this.updateDepth(dt);
+
     /* movimento */
     const fx = Math.sin(this.ang), fy = -Math.cos(this.ang), rx = Math.cos(this.ang), ry = Math.sin(this.ang);
     let vf = this.vx * fx + this.vy * fy, vs = this.vx * rx + this.vy * ry;
     const th = clamp(inp.throttle, -1, 1), thrust = th >= 0 ? th : th * 0.4;
-    vf += (st.accel * thrust - 0.25 * vf) * dt;
+    const accel = st.accel + (st.accelSub - st.accel) * this.depth, mxs = st.maxSpeed + (st.maxSpeedSub - st.maxSpeed) * this.depth;
+    vf += (accel * thrust - 0.25 * vf) * dt;
     vs *= Math.exp(-st.grip * dt);
     this.vx = fx * vf + rx * vs; this.vy = fy * vf + ry * vs;
-    const eff = Math.min(1, 0.3 + 0.7 * Math.abs(vf) / (0.45 * Math.max(st.maxSpeed, 60)));
+    const eff = Math.min(1, 0.3 + 0.7 * Math.abs(vf) / (0.45 * Math.max(mxs, 60)));
     const target = clamp(inp.steer, -1, 1) * st.turn * eff;
     this.angVel += (target - this.angVel) * Math.min(1, dt * 4);
     this.ang += this.angVel * dt;
@@ -242,8 +247,9 @@ class Ship {
     if (this.y < -lim) { this.y = -lim; this.vy = Math.abs(this.vy) * 0.3; }
     if (this.y > lim) { this.y = lim; this.vy = -Math.abs(this.vy) * 0.3; }
     this.ca = Math.cos(this.ang); this.sa = Math.sin(this.ang);
-    this.flame += ((th > 0 && st.engines ? th : 0) - this.flame) * Math.min(1, dt * 6);
+    this.flame += ((th > 0 && st.engines && this.depth < 0.5 ? th : 0) - this.flame) * Math.min(1, dt * 6);
     this.speed = Math.hypot(this.vx, this.vy);
+    this.quiet = st.quiet * (this.speed < 25 ? 0.5 : 1);                   // parado ou com motor elétrico: o sonar passivo ouve menos
 
     if (this.revealT > 0) this.revealT -= dt;
     if (this.pingT > 0) this.pingT -= dt;
@@ -266,11 +272,32 @@ class Ship {
     this.emitTrail(dt);
   }
 
+  /** mergulho, bateria e visão submersa (só navios com Torre Submarina) */
+  updateDepth(dt) {
+    const st = this.stats, inp = this.input;
+    if (inp.dive) { this.diveCmd = !this.diveCmd; inp.dive = false; }
+    if (this.diveCmd && this.battery <= 0) this.diveCmd = false;           // sem bateria: sobe sozinho
+    const rate = 0.5 * st.diveMul;
+    this.depth += clamp((this.diveCmd ? 1 : 0) - this.depth, -rate * dt, rate * dt);
+    this.sub = this.depth > DEEP;
+    if (this.sub) {
+      if (!st.nuclear) this.battery = Math.max(0, this.battery - dt * (this.speed > st.maxSpeedSub * 0.7 ? 1.5 : 1));
+      this.vision = (st.periscopes ? 650 : 350) * this.visMul;              // radar não funciona submerso
+    } else {
+      this.battery = Math.min(this.maxBattery, this.battery + dt * 3);
+      this.vision = st.vision * this.visMul;
+    }
+  }
+
   /** esteira de espuma e fumaça das peças avariadas */
   emitTrail(dt) {
     const fx = Math.sin(this.ang), fy = -Math.cos(this.ang), rx = Math.cos(this.ang), ry = Math.sin(this.ang);
     this.wakeT -= dt;
-    if (this.wakeT <= 0 && this.speed > 25) {
+    if (this.wakeT <= 0 && this.speed > 25 && this.depth >= 0.5) {         // submerso: só bolhas
+      this.wakeT = 0.12;
+      Battle.addP({ t: 'foam', x: this.x - fx * this.hl * 0.9 + rand(-6, 6), y: this.y - fy * this.hl * 0.9 + rand(-6, 6), vx: rand(-8, 8), vy: rand(-8, 8), life: 0.9, s: 2.2, g: 4, layer: 0, a: 0.7 });
+    }
+    if (this.wakeT <= 0 && this.speed > 25 && this.depth < 0.5) {
       this.wakeT = 0.05;
       for (const c of this.list) {
         if (c.dead || !c.top || PARTS[c.top.type].kind !== 'engine' || this.flame < 0.1) continue;
@@ -321,11 +348,15 @@ class Ship {
     if (!this.net) { this.x = m.x; this.y = m.y; this.ang = m.a; this.net = { x: m.x, y: m.y, a: m.a, vx: 0, vy: 0, fl: 0 }; }
     const n = this.net;
     n.x = m.x; n.y = m.y; n.a = m.a; n.vx = m.vx; n.vy = m.vy; n.fl = m.fl;
-    this.seenT = 0.9;
+    const ids = m.vis || [Battle.player.id];                    // quais dos meus (eu e meus bots) enxergam este navio
+    if (!this.seenBy) this.seenBy = {};
+    for (const id of ids) this.seenBy[id] = Battle.time;
+    if (ids.includes(Battle.player.id)) this.seenT = 0.9;
     if (m.c) this.applyCells(m.c);
     this.shield = Math.min(m.sh, this.shieldMax);
     this.vision = m.v; this.sonar = m.sp; this.pingR = m.pr; this.sig = m.sg;
     this.reveal = !!m.rv; this.revealR = m.rv || 0; this.ping = !!m.pg;
+    this.depth = m.dp || 0; this.sub = this.depth > DEEP; this.quiet = m.qt === undefined ? 1 : m.qt;
     if (m.tp) {
       let i = 0;
       for (const k of this.order) { const c = this.cells.get(k), a = m.tp[i++]; if (c && c.top && typeof a === 'number') c.top.ang = a; }
@@ -363,6 +394,7 @@ class Ship {
     if (t.cd > 0) t.cd -= dt;
     if (t.recoil > 0) t.recoil = Math.max(0, t.recoil - dt * 5);
     const [wx, wy] = this.cellWorld(c);
+    if (this.depth > 0.3 && (P.kind === 'cannon' || P.kind === 'mortar' || P.kind === 'mg' || P.kind === 'missile' || P.kind === 'depth' || P.kind === 'pd')) return;   // submerso: só torpedos, minas e sensores
     switch (P.kind) {
       case 'cannon': {
         const [ax, ay] = this.aimPoint(wx, wy, P.speed);
@@ -421,16 +453,42 @@ class Ship {
       case 'torp':
         if (inp.fireTorp && t.cd <= 0) {
           t.cd = P.reload * this.rl;
-          const [dx, dy] = dirOf(this.ang);
-          Battle.shoot({ kind: 'torp', x: wx + dx * CS * 0.8, y: wy + dy * CS * 0.8, vx: dx * P.speed + this.vx * 0.3, vy: dy * P.speed + this.vy * 0.3, life: P.range / P.speed, dmg: P.dmg, team: this.team, owner: this.id, splash: P.splash });
+          const [dx, dy] = dirOf(this.ang), n = P.shots || 1;
+          const target = P.turn ? Battle.pickGuidedTarget(this) : null;
+          for (let i = 0; i < n; i++) {
+            const a = this.ang + (n > 1 ? (i - (n - 1) / 2) * (P.spread || 0) : 0), [bx, by] = dirOf(a);
+            Battle.shoot({ kind: 'torp', x: wx + dx * CS * 0.8, y: wy + dy * CS * 0.8, vx: bx * P.speed + this.vx * 0.3, vy: by * P.speed + this.vy * 0.3,
+              ang: a, speed: P.speed, life: P.range / P.speed, dmg: P.dmg, team: this.team, owner: this.id, splash: P.splash, turn: P.turn || 0, target });
+          }
           SFX.play('torp', wx, wy); this.doReveal(900, 1.5);
         }
         break;
+      case 'mine':
+        if (inp.fireAux && t.cd <= 0) {
+          t.cd = P.reload * this.rl;
+          const [dx, dy] = dirOf(this.ang);
+          Battle.shoot({ kind: 'mine', x: wx - dx * CS * 1.4, y: wy - dy * CS * 1.4, vx: 0, vy: 0, life: P.life, arm: P.arm, dmg: P.dmg, splash: P.splash, team: this.team, owner: this.id });
+          SFX.play('hit', wx, wy);
+        }
+        break;
+      case 'depth': {
+        const [ax, ay] = this.aimPoint(wx, wy, P.speed);
+        const want = Math.atan2(ax - wx, -(ay - wy)), dist = Math.hypot(ax - wx, ay - wy);
+        t.ang = turnToward(t.ang, want, 3 * this.stats.turnMul * dt);
+        if (inp.fireMain && t.cd <= 0) {
+          if (this.ai && dist > P.range) break;
+          t.cd = P.reload * this.rl; t.recoil = 1;
+          const d = clamp(dist, P.minRange, P.range);
+          const ux = dist > 1 ? (ax - wx) / dist : Math.sin(this.ang), uy = dist > 1 ? (ay - wy) / dist : -Math.cos(this.ang);
+          const T = d / P.speed;
+          Battle.shoot({ kind: 'depth', x: wx, y: wy, x0: wx, y0: wy, tx: wx + ux * d, ty: wy + uy * d, T, life: T, fuse: 1.6, dmg: P.dmg, dmgSurf: P.dmgSurf, splash: P.splash, team: this.team, owner: this.id });
+          SFX.play('hit', wx, wy);
+        }
+        break;
+      }
       case 'missile':
         if (inp.fireMissile && t.cd <= 0) {
-          const target = this.team === 'p'
-            ? (Battle.nearestEnemy(this, inp.aimX, inp.aimY, 450) || Battle.nearestEnemy(this, this.x, this.y, 1600))
-            : Battle.player;
+          const target = Battle.pickGuidedTarget(this);
           if (!target) break;
           t.cd = P.reload * this.rl; t.recoil = 1;
           const [dx, dy] = dirOf(this.ang);
@@ -467,7 +525,7 @@ class Ship {
         break;
       case 'jammer':
         for (const sh of Battle.shots)
-          if (sh.kind === 'missile' && sh.team !== this.team && !sh.dead && Math.hypot(sh.x - wx, sh.y - wy) < P.range) sh.jam = 1.5;
+          if ((sh.kind === 'missile' || (sh.kind === 'torp' && sh.turn)) && sh.team !== this.team && !sh.dead && Math.hypot(sh.x - wx, sh.y - wy) < P.range) sh.jam = 1.5;
         break;
       case 'repair': {
         t.acc += dt;
@@ -497,11 +555,12 @@ class Ship {
     if (this.sinking) { const k = this.sinkT / 2.8; alpha = 1 - k * 0.9; scale = 1 - k * 0.2; }
     const ox = this.ox, oy = this.oy;
     if (this.sig < 0.5) alpha *= 0.72;                    // casco furtivo: meio fantasma
+    if (this.depth > 0) alpha *= 1 - 0.55 * this.depth;   // submerso: translúcido
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.save();
     ctx.translate(this.x + 6, this.y + 8); ctx.rotate(this.ang); ctx.scale(scale, scale);
-    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.fillStyle = this.depth > 0.5 ? 'rgba(0,0,0,0)' : 'rgba(0,0,0,0.25)';
     for (const c of this.list) ctx.fillRect((c.gx - ox) * CS, (c.gy - oy) * CS, CS, CS);
     ctx.restore();
 
@@ -529,10 +588,10 @@ class Ship {
   }
 
   weaponStatus() {
-    const acc = { cannon: [0, 0], mortar: [0, 0], torp: [0, 0] };
+    const acc = { cannon: [0, 0], mortar: [0, 0], torp: [0, 0], mine: [0, 0] };
     for (const c of this.list) {
       if (!c.top) continue;
-      const P = PARTS[c.top.type], k = P.kind === 'missile' ? 'torp' : P.kind;
+      const P = PARTS[c.top.type], k = P.kind === 'missile' ? 'torp' : P.kind === 'depth' ? 'mortar' : P.kind;
       if (acc[k]) { acc[k][0]++; acc[k][1] += clamp(1 - c.top.cd / P.reload, 0, 1); }
     }
     const s = {};
@@ -558,12 +617,12 @@ const Battle = {
   ships: [], shots: [], parts: [], player: null, cam: { x: 0, y: 0 }, shake: 0, time: 0,
   keys: new Set(), mouse: { x: 0, y: 0, left: false, right: false },
   wave: 1, state: 'idle', running: false, last: 0, clearTimer: 0, overTimer: 0,
-  runCoins: 0, kills: 0, design: null, hud: {}, mode: 'campaign', shotSeq: 0, myDesign: null, cfg: null, deadNotice: false, contacts: new Map(), obs: [], aiAware: true, aiLast: { x: 0, y: 0 }, stealthT: 0,
+  runCoins: 0, kills: 0, design: null, hud: {}, mode: 'campaign', teamLast: {}, skirmish: null, localIds: new Set(), zoom: 1, shotSeq: 0, myDesign: null, cfg: null, deadNotice: false, contacts: new Map(), obs: [], aiAware: true, aiLast: { x: 0, y: 0 }, stealthT: 0,
 
   init() {
     this.canvas = document.getElementById('game'); this.ctx = this.canvas.getContext('2d');
     this.mini = document.getElementById('minimap'); this.mctx = this.mini.getContext('2d');
-    for (const id of ['wave', 'enemies', 'coins', 'hp-fill', 'hp-text', 'speed', 'cd-cannon', 'cd-torp', 'cd-mortar', 'row-cannon', 'row-torp', 'row-mortar', 'row-shield', 'shield-fill', 'row-stealth', 'stealth-fill', 'vision'])
+    for (const id of ['wave', 'enemies', 'coins', 'hp-fill', 'hp-text', 'speed', 'cd-cannon', 'cd-torp', 'cd-mortar', 'row-cannon', 'row-torp', 'row-mortar', 'row-shield', 'shield-fill', 'row-stealth', 'stealth-fill', 'vision', 'row-depth', 'depth-fill', 'row-batt', 'batt-fill', 'row-mine', 'cd-mine'])
       this.hud[id] = document.getElementById('hud-' + id);
     this.fogCv = document.createElement('canvas'); this.fogCtx = this.fogCv.getContext('2d');
     window.addEventListener('resize', () => this.resize());
@@ -572,12 +631,16 @@ const Battle = {
       if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
       if (e.repeat) return;
       this.keys.add(e.code);
+      if (e.code === 'KeyV' && this.player && !this.player.remote) this.player.input.dive = true;      // mergulhar/emergir
       if (e.code === 'Escape' || e.code === 'KeyP') this.togglePause();
       if (e.code === 'KeyM') { SFX.muted = !SFX.muted; }
+      if (e.code === 'Minus' || e.code === 'NumpadSubtract') this.setZoom(this.zoom / 1.15);
+      if (e.code === 'Equal' || e.code === 'NumpadAdd') this.setZoom(this.zoom * 1.15);
     });
     window.addEventListener('keyup', e => this.keys.delete(e.code));
     window.addEventListener('blur', () => this.keys.clear());
     this.canvas.addEventListener('contextmenu', e => e.preventDefault());
+    this.canvas.addEventListener('wheel', e => { e.preventDefault(); this.setZoom(this.zoom * (e.deltaY > 0 ? 1 / 1.1 : 1.1)); }, { passive: false });
     this.canvas.addEventListener('pointerdown', e => {
       SFX.init();
       if (e.pointerType === 'touch') return;           // no celular quem manda são os joysticks
@@ -597,19 +660,32 @@ const Battle = {
     this.fogCv.width = this.W; this.fogCv.height = this.H;
   },
 
+  /* ---------------------------------------------------------------- zoom */
+  loadZoom() {
+    const z = Meta.zoom;
+    if (z) return clamp(z, 0.35, 1.6);
+    return window.innerWidth < 900 ? 0.75 : 1;
+  },
+  setZoom(z) {
+    this.zoom = clamp(z, 0.35, 1.6); Meta.zoom = +this.zoom.toFixed(2); Meta.save();
+    UI.banner('ZOOM ' + Math.round(this.zoom * 100) + '%', '');
+  },
+
   /* ----------------------------------------------------- ciclo de vida */
-  start(design, wave) {
+  start(design, wave, skirmish) {
     SFX.init();
     this.mode = 'campaign'; document.getElementById('screen-battle').classList.remove('online');
     this.design = design; this.wave = wave; this.runCoins = 0; this.kills = 0;
     this.clearTimer = 0; this.overTimer = 0;
     this.ships = []; this.shots = []; this.parts = []; this.time = 0; this.shake = 0;
     this.player = new Ship(design, 'p', 0, 0, 0); this.player.id = 'me';
-    this.ships.push(this.player); this.stealthT = 0; this.aiAware = true; this.aiLast = { x: 0, y: 0 };
+    this.ships.push(this.player); this.stealthT = 0; this.teamLast = {}; this.skirmish = null; this.localIds = new Set();
+    this.zoom = this.loadZoom();
     this.cam.x = 0; this.cam.y = 0;
     this.keys.clear(); this.mouse.left = this.mouse.right = false;
     this.resize();
-    this.spawnWave();
+    this.skirmish = skirmish || null;
+    if (this.skirmish) this.spawnSkirmish(); else this.spawnWave();
     this.state = 'playing';
     if (!this.running) { this.running = true; this.last = performance.now(); requestAnimationFrame(t => this.loop(t)); }
   },
@@ -624,9 +700,13 @@ const Battle = {
     this.wave = 0; this.runCoins = 0; this.kills = 0;
     this.ships = []; this.shots = []; this.parts = []; this.time = 0; this.shake = 0;
     const sp = cfg.spawn;
+    this.skirmish = null; this.teamLast = {}; this.localIds = new Set([cfg.me.id]); this.zoom = this.loadZoom();
     this.player = new Ship(cfg.me.design, cfg.me.team, sp.x, sp.y, sp.a); this.player.id = cfg.me.id; this.player.label = cfg.me.name;
     this.ships.push(this.player);
-    for (const p of cfg.players) if (p.id !== cfg.me.id) this.addRemote(p, cfg.spawns[p.id]);
+    for (const p of cfg.players) {
+      if (p.id === cfg.me.id) continue;
+      if (p.bot && p.owner === cfg.me.id) this.addLocalBot(p, cfg.spawns[p.id]); else this.addRemote(p, cfg.spawns[p.id]);   // meus bots rodam aqui
+    }
     this.cam.x = sp.x; this.cam.y = sp.y;
     this.keys.clear(); this.mouse.left = this.mouse.right = false;
     this.resize();
@@ -638,6 +718,17 @@ const Battle = {
     s.id = p.id; s.label = p.name; s.remote = true; s.seenT = 0; s.net = null;
     this.ships.push(s); return s;
   },
+  addLocalBot(p, sp) {
+    const s = this.makeBot(p.design, p.team, sp ? sp.x : 0, sp ? sp.y : 0, sp ? sp.a : 0, p.name, p.diff, p.id);
+    this.localIds.add(p.id); this.ships.push(s); return s;
+  },
+  respawnBot(id, x, y, a) {
+    const p = this.cfg.players.find(q => q.id === id);
+    if (!p) return;
+    this.ships = this.ships.filter(q => q.id !== id);
+    this.addLocalBot(p, { x, y, a });
+  },
+  localBots() { return this.ships.filter(s => s.ai && !s.remote && !s.dead); },
   shipById(id) { return this.ships.find(s => s.id === id); },
   respawnMe(x, y, a) {
     const old = this.player;
@@ -655,8 +746,9 @@ const Battle = {
     if (this.mode !== 'online' || !this.player) return;
     const lag = clamp((Online.pingMs || 0) / 2000, 0, 0.3);
     const p = { kind: m.kind, id: m.id, owner: m.owner, team: m.team, x: m.x + m.vx * lag, y: m.y + m.vy * lag, vx: m.vx, vy: m.vy, life: m.life - lag,
-      dmg: m.dmg, pierce: m.pierce, big: m.big, splash: m.splash, turn: m.turn, ang: m.ang, speed: m.speed, tx: m.tx, ty: m.ty, T: m.T, x0: m.x0, y0: m.y0, remoteOwned: true };
-    if (m.kind === 'missile') p.target = this.shipById(m.tg) || null;
+      dmg: m.dmg, pierce: m.pierce, big: m.big, splash: m.splash, turn: m.turn, ang: m.ang, speed: m.speed, tx: m.tx, ty: m.ty, T: m.T, x0: m.x0, y0: m.y0,
+      fuse: m.fuse, dmgSurf: m.dmgSurf, arm: m.arm, age: 0, remoteOwned: true };
+    if (m.kind === 'missile' || (m.kind === 'torp' && m.turn)) p.target = this.shipById(m.tg) || null;
     this.shots.push(p);
     if (this.inVision(p.x, p.y)) this.addP({ t: 'flash', x: p.x, y: p.y, life: 0.09, s: 9, g: 20 });
   },
@@ -702,10 +794,21 @@ const Battle = {
     } else if (this.state === 'paused') { this.state = 'playing'; UI.hideOverlay(); }
   },
 
+  /** modelos disponíveis para bots (inclui o clone do navio do jogador) */
+  botPool() {
+    const list = PRESETS.slice();
+    const mine = this.design || (Meta.design || null);
+    if (mine) list.push({ id: 'meu', name: 'Clone do meu navio', power: Math.max(1, Math.round(shipStats(designCells(mine)).cost / 100)), minWave: 1, design: mine });
+    return list;
+  },
+
   spawnWave() {
-    let power = Math.min(40, Math.round(this.wave * 1.5 - 0.5));
-    const pool = PRESETS.filter(p => p.minWave <= this.wave), list = [];
-    while (power > 0 && list.length < 10) {
+    const cfg = Meta.bots;
+    let power = Math.min(80, Math.max(1, Math.round((this.wave * 1.5 - 0.5) * cfg.mult)));
+    let pool = this.botPool().filter(p => p.minWave <= this.wave && (!cfg.allowed || cfg.allowed.includes(p.id)));
+    if (!pool.length) pool = [PRESETS[0]];
+    const list = [];
+    while (power > 0 && list.length < 14) {
       const opts = pool.filter(p => p.power <= power);
       if (!opts.length) break;
       let tot = 0; for (const p of opts) tot += p.power + 1;
@@ -713,28 +816,37 @@ const Battle = {
       for (const p of opts) { r -= p.power + 1; if (r <= 0) { pick = p; break; } }
       power -= pick.power; list.push(pick);
     }
+    if (!list.length) list.push(pool[0]);
+    this.placeBots(list, cfg.diff);
+    const boss = list.some(p => p.id === 'dreadnought');
+    UI.banner('ONDA ' + this.wave, (boss ? 'CHEFE: Superencouraçado! + ' : '') + list.length + (list.length > 1 ? ' navios inimigos' : ' navio inimigo') + ' · ' + BOT_DIFFS[cfg.diff].name);
+  },
+
+  /** escaramuça: o jogador escolheu exatamente quais bots enfrentar */
+  spawnSkirmish() {
+    const cfg = Meta.bots, pool = this.botPool(), list = [];
+    for (const id in this.skirmish.counts) { const p = pool.find(q => q.id === id); for (let i = 0; i < this.skirmish.counts[id]; i++) if (p) list.push(p); }
     if (!list.length) list.push(PRESETS[0]);
+    this.wave = this.skirmish.wave || 5;                                   // escala da IA (precisão/recarga do "Normal")
+    this.placeBots(list, this.skirmish.diff || cfg.diff);
+    UI.banner('ESCARAMUÇA', list.length + (list.length > 1 ? ' bots' : ' bot') + ' · ' + BOT_DIFFS[this.skirmish.diff || cfg.diff].name);
+  },
+
+  /** distribui os bots em volta do jogador */
+  placeBots(list, diffKey) {
     const base = rand(0, TAU), pl = this.player;
-    this.aiLast = { x: pl.x, y: pl.y };
+    this.teamLast.e = { x: pl.x, y: pl.y };
     list.forEach((p, i) => {
       const a = base + i * (TAU / list.length) + rand(-0.3, 0.3), d = rand(750, 1050), lim = HALF - 250;
       const x = clamp(pl.x + Math.sin(a) * d, -lim, lim), y = clamp(pl.y - Math.cos(a) * d, -lim, lim);
-      const s = new Ship(p.design, 'e', x, y, Math.atan2(pl.x - x, -(pl.y - y)));
-      s.label = p.name; s.id = 'ai' + i;
-      s.ai = { t: 0, torpGate: rand(4, 7), missGate: rand(3, 6), orbit: Math.random() < 0.5 ? 1 : -1, err: 0, errAng: 0, aimCell: null,
-        inacc: clamp(0.17 - this.wave * 0.008, 0.05, 0.17),
-        pref: (s.maxRange ? s.maxRange * 0.62 : s.mgRange ? s.mgRange * 0.6 : 90) + rand(-40, 40) };
-      s.reloadMul = clamp(1.5 - this.wave * 0.05, 1, 1.5);
-      this.ships.push(s);
+      this.ships.push(this.makeBot(p.design, 'e', x, y, Math.atan2(pl.x - x, -(pl.y - y)), p.name, diffKey, 'ai' + i));
     });
-    const boss = list.some(p => p.id === 'dreadnought');
-    UI.banner('ONDA ' + this.wave, (boss ? 'CHEFE: Superencouraçado! + ' : '') + list.length + (list.length > 1 ? ' navios inimigos' : ' navio inimigo'));
   },
 
   onSunk(ship) {
     this.explosion(ship.x, ship.y, 2);
-    if (this.mode === 'online') { if (ship === this.player) Online.sendDied(ship.lastAttacker); return; }
-    if (ship.team === 'e') {
+    if (this.mode === 'online') { if (ship === this.player) Online.sendDied(ship.lastAttacker); else if (!ship.remote && ship.ai) Online.sendDied(ship.lastAttacker, ship.id); return; }
+    if (ship.team === 'e' && !this.skirmish) {
       const gain = Math.round(ship.cost * 0.3);
       this.kills++; this.runCoins += gain; Meta.coins += gain; Meta.save();
       this.addP({ t: 'text', txt: '+' + gain + ' 🪙', x: ship.x, y: ship.y - 30, vy: -35, life: 1.8, s: 18, col: '#ffd166' });
@@ -748,15 +860,15 @@ const Battle = {
     p.max = p.life; this.parts.push(p);
   },
   shoot(s) {
-    if (this.mode === 'online' && s.owner === this.player.id) {      // tiro do jogador local: anuncia aos outros
+    if (this.mode === 'online' && this.localIds.has(s.owner)) {      // tiro do jogador local (ou de um bot meu): anuncia aos outros
       s.id = s.owner + ':' + (++this.shotSeq);
-      Online.sendShot(s);
+      Online.sendShot(s, s.owner === this.player.id ? null : s.owner);
     }
     this.shots.push(s);
   },
   /** ganchos do modo online (sobrescritos por Online) */
   onShotGone(p) { if (this.mode === 'online' && p.id) Online.send({ t: 'hit', id: p.id, x: p.x, y: p.y }); },
-  onPing(ship) { if (this.mode === 'online' && ship === this.player) Online.send({ t: 'ping' }); },
+  onPing(ship) { if (this.mode === 'online' && !ship.remote) Online.send(ship === this.player ? { t: 'ping' } : { t: 'ping', as: ship.id }); },
 
   /* ------------------------------------------------- visão e detecção */
   /** o time `team` detecta o alvo (visão normal, sonar, revelação)? */
@@ -764,12 +876,27 @@ const Battle = {
     for (const o of this.ships) if (o.team === team && !o.sinking && !o.dead && detects(o, tg)) return true;
     return false;
   },
+  /** a arma/torre de `ship` pode mirar em `s`? (precisa estar detectado) */
+  canTarget(ship, s) {
+    if (this.mode === 'online') return ship === this.player ? this.visibleToMe(s) : (this.botSees ? this.botSees(ship, s) : true);
+    return this.teamSees(ship.team, s);
+  },
+  /** alvo de armas guiadas: o mais próximo do cursor (jogador) ou do próprio navio (IA) */
+  pickGuidedTarget(ship) {
+    const inp = ship.input;
+    if (ship.ai) return this.nearestEnemy(ship, ship.x, ship.y, 1600);
+    return this.nearestEnemy(ship, inp.aimX, inp.aimY, 450) || this.nearestEnemy(ship, ship.x, ship.y, 1600);
+  },
+  nearObserver(x, y, r) {
+    for (const o of this.obs) if (Math.hypot(x - o.x, y - o.y) < r) return true;
+    return false;
+  },
   /** o jogador local (ou um aliado) vê este navio? */
   visibleToMe(s) {
     if (!this.player) return false;
     if (s === this.player || s.team === this.player.team) return true;
-    if (this.mode === 'online') return s.seenT > 0;
-    return this.teamSees(this.player.team, s);
+    if (this.mode === 'online' && s.remote) return s.seenT > 0;            // humanos remotos: o anfitrião só me enviou quem eu detecto
+    return this.teamSees(this.player.team, s);                              // navios locais (bots que eu hospedo): detecção normal
   },
   /** atualiza quem aparece: 'full' (dentro da visão), 'blip' (só sonar/revelação) */
   computeVisibility() {
@@ -794,7 +921,7 @@ const Battle = {
     let best = null, bd = range;
     for (const s of this.ships) {
       if (s.team === ship.team || s.sinking || s.dead) continue;
-      if (this.mode === 'online' ? !this.visibleToMe(s) : !this.teamSees(ship.team, s)) continue;   // furtivos não são alvo de torres e mísseis
+      if (!this.canTarget(ship, s)) continue;                       // furtivos e submersos só são alvo se detectados
       const d = Math.hypot(s.x - x, s.y - y) - s.radius * 0.6;
       if (d < bd) { bd = d; best = s; }
     }
@@ -858,29 +985,60 @@ const Battle = {
     if (p.sinking) return;
     i.throttle = (k.has('KeyW') || k.has('ArrowUp') ? 1 : 0) - (k.has('KeyS') || k.has('ArrowDown') ? 1 : 0);
     i.steer = (k.has('KeyD') || k.has('ArrowRight') ? 1 : 0) - (k.has('KeyA') || k.has('ArrowLeft') ? 1 : 0);
-    i.aimX = this.cam.x + (this.mouse.x - this.W / 2);
-    i.aimY = this.cam.y + (this.mouse.y - this.H / 2);
+    i.aimX = this.cam.x + (this.mouse.x - this.W / 2) / this.zoom;
+    i.aimY = this.cam.y + (this.mouse.y - this.H / 2) / this.zoom;
     i.fireMain = this.mouse.left;
     i.fireTorp = this.mouse.right || k.has('Space');
     i.fireMissile = i.fireTorp;
+    i.fireAux = k.has('KeyF');
     if (Touch.enabled && !Touch.root.classList.contains('hidden')) Touch.apply(p, i, this);
   },
 
-  aiThink(s, dt) {
-    const a = s.ai, inp = s.input, tg = this.player;
-    if (!tg || tg.sinking) {
-      inp.throttle = 0.2; inp.steer = Math.sin(this.time * 0.3) * 0.4;
-      inp.fireMain = inp.fireTorp = inp.fireMissile = false; return;
+  /** bot: o inimigo detectado mais próximo (cada bot usa a própria visão/sonar) */
+  pickTarget(s) {
+    let best = null, bd = 1e9;
+    for (const o of this.ships) {
+      if (o.team === s.team || o.sinking || o.dead) continue;
+      if (!this.botSees(s, o)) continue;
+      const d = Math.hypot(o.x - s.x, o.y - s.y);
+      if (d < bd) { bd = d; best = o; }
     }
-    if (!this.aiAware) {                                                 // perdeu o jogador de vista: vai ao último ponto e procura
-      const L = this.aiLast, ldx = L.x - s.x, ldy = L.y - s.y;
+    return best;
+  },
+  /** o bot `s` detecta `o`? (online: humanos remotos só contam se o servidor enviou o retrato para este bot) */
+  botSees(s, o) {
+    if (this.mode === 'online' && o.remote) return !!(o.seenBy && this.time - (o.seenBy[s.id] || -9) < 0.9);
+    return this.teamSees(s.team, o);
+  },
+  /** cria um bot com a dificuldade escolhida */
+  makeBot(design, team, x, y, ang, label, diffKey, id) {
+    const d = BOT_DIFFS[diffKey] || BOT_DIFFS.normal, w = Math.max(1, this.wave || 1);
+    const s = new Ship(design, team, x, y, ang);
+    s.label = label; s.id = id; s.visMul = d.vis; s.refresh(); s.battery = s.maxBattery;
+    s.ai = { t: 0, torpGate: rand(4, 7) * d.gate, missGate: rand(3, 6) * d.gate, mineGate: undefined, gate: d.gate,
+      orbit: Math.random() < 0.5 ? 1 : -1, err: 0, errAng: 0, aimCell: null, last: null,
+      inacc: d.inacc != null ? d.inacc : clamp(0.17 - w * 0.008, 0.05, 0.17),
+      pref: (s.maxRange ? s.maxRange * 0.62 : s.mgRange ? s.mgRange * 0.6 : 90) + rand(-40, 40) };
+    s.reloadMul = d.reload != null ? d.reload : clamp(1.5 - w * 0.05, 1, 1.5);
+    return s;
+  },
+
+  aiThink(s, dt) {
+    const a = s.ai, inp = s.input;
+    const tg = this.pickTarget(s);
+    inp.fireMain = inp.fireTorp = inp.fireMissile = inp.fireAux = false;
+    if (tg) { a.last = { x: tg.x, y: tg.y }; this.teamLast[s.team] = a.last; }
+    if (!tg) {                                                           // sem alvo à vista: vai ao último ponto conhecido da equipe e procura
+      const L = a.last || this.teamLast[s.team];
+      if (!L) { inp.throttle = 0.2; inp.steer = Math.sin(this.time * 0.3) * 0.4; return; }
+      const ldx = L.x - s.x, ldy = L.y - s.y;
       if (Math.hypot(ldx, ldy) < 200) {
-        const lim = HALF - 300;
-        this.aiLast = { x: clamp(L.x + rand(-800, 800), -lim, lim), y: clamp(L.y + rand(-800, 800), -lim, lim) };
+        const lim = HALF - 300, nl = { x: clamp(L.x + rand(-800, 800), -lim, lim), y: clamp(L.y + rand(-800, 800), -lim, lim) };
+        a.last = nl; this.teamLast[s.team] = nl;
       }
       inp.steer = clamp(angDiff(Math.atan2(ldx, -ldy), s.ang) * 2, -1, 1);
       inp.throttle = s.stats.maxSpeed ? 0.75 : 0;
-      inp.fireMain = inp.fireTorp = inp.fireMissile = false; return;
+      return;
     }
     const dx = tg.x - s.x, dy = tg.y - s.y, dist = Math.hypot(dx, dy), toT = Math.atan2(dx, -dy);
     a.t -= dt;
@@ -902,29 +1060,33 @@ const Battle = {
     inp.throttle = s.stats.maxSpeed ? (Math.abs(diff) > 1.4 ? 0.35 : 1) : 0;
     inp.aimX = ax + Math.cos(a.errAng) * a.err;
     inp.aimY = ay + Math.sin(a.errAng) * a.err;
+    if (s.isSub) {                                       // submarino: fica submerso; emerge para recarregar ou se tiver armas de convés
+      const deck = s.stats.cannons + s.stats.mortars + s.stats.mgs + s.stats.missiles + s.stats.depths > 0;
+      let dive = true;
+      if (s.battery < s.maxBattery * 0.15 || (!s.diveCmd && s.battery < s.maxBattery * 0.6)) dive = false;
+      if (deck && dist < 350) dive = false;
+      if (dive !== s.diveCmd) inp.dive = true;
+    }
+    a.mineGate = (a.mineGate === undefined ? rand(3, 6) : a.mineGate) - dt;
+    if (s.stats.mines && a.mineGate <= 0 && dist < 1000) { inp.fireAux = true; a.mineGate = rand(5, 9) * a.gate; }
     inp.tvx = tg.vx; inp.tvy = tg.vy;                    // cada arma antecipa conforme a própria velocidade
     inp.fireMain = s.maxRange > 0 && dist < s.maxRange * 0.97;
     // torpedos: só quando alinhado, e com intervalo mínimo para dar chance de desviar
     a.torpGate -= dt; a.missGate -= dt;
-    inp.fireTorp = false; inp.fireMissile = false;
     if (s.hasTorp && a.torpGate <= 0 && dist < 700 && Math.abs(angDiff(toT, s.ang)) < 0.12
         && s.list.some(c => c.top && PARTS[c.top.type].kind === 'torp' && c.top.cd <= 0)) {
-      inp.fireTorp = true; a.torpGate = rand(4.5, 6.5);
+      inp.fireTorp = true; a.torpGate = rand(4.5, 6.5) * a.gate;
     }
     if (s.stats.missiles && a.missGate <= 0 && dist < 780 && dist > 150
         && s.list.some(c => c.top && PARTS[c.top.type].kind === 'missile' && c.top.cd <= 0)) {
-      inp.fireMissile = true; a.missGate = rand(3, 5);
+      inp.fireMissile = true; a.missGate = rand(3, 5) * a.gate;
     }
   },
 
   update(dt) {
     this.time += dt;
     this.playerInput();
-    if (this.mode !== 'online') {
-      this.aiAware = !this.player.sinking && this.teamSees('e', this.player);
-      if (this.aiAware) this.aiLast = { x: this.player.x, y: this.player.y };
-      for (const s of this.ships) if (s.ai) this.aiThink(s, dt);
-    }
+    for (const s of this.ships) if (s.ai && !s.sinking && !s.dead) this.aiThink(s, dt);
     for (const s of this.ships) { if (s.remote) s.updateRemote(dt); else s.update(dt); }
 
     /* colisão entre navios (círculos) */
@@ -951,19 +1113,48 @@ const Battle = {
       if (p.kind === 'mortar') {                          // voa em arco por cima de tudo
         const k = clamp(1 - p.life / p.T, 0, 1);
         p.x = p.x0 + (p.tx - p.x0) * k; p.y = p.y0 + (p.ty - p.y0) * k;
-        if (p.life <= 0) { p.dead = true; this.blast(p.tx, p.ty, p.splash, p.dmg, p.team, p.owner); this.splash(p.tx, p.ty, 1.2); }
+        if (p.life <= 0) { p.dead = true; this.blast(p.tx, p.ty, p.splash, p.dmg, p.team, p.owner, 'mortar'); this.splash(p.tx, p.ty, 1.2); }
         continue;
       }
-      if (p.kind === 'missile') this.steerMissile(p, dt);
+      if (p.kind === 'depth') {                           // carga de profundidade: voa em arco, afunda e explode no fundo
+        if (!p.fused) {
+          const k = clamp(1 - p.life / p.T, 0, 1);
+          p.x = p.x0 + (p.tx - p.x0) * k; p.y = p.y0 + (p.ty - p.y0) * k;
+          if (p.life <= 0) { p.fused = true; p.life = p.fuse; p.x = p.tx; p.y = p.ty; this.splash(p.tx, p.ty, 1); }
+        } else {
+          if (Math.random() < dt * 14) this.addP({ t: 'foam', x: p.tx + rand(-10, 10), y: p.ty + rand(-10, 10), life: 0.8, s: 3, g: 5, layer: 0, a: 0.8 });
+          if (p.life <= 0) { p.dead = true; this.blast(p.tx, p.ty, p.splash, p.dmg, p.team, p.owner, 'depth', p.dmgSurf); }
+        }
+        continue;
+      }
+      if (p.kind === 'mine') {                            // mina parada: arma depois de alguns segundos e explode em quem encostar
+        p.age = (p.age || 0) + dt;
+        if (p.life <= 0) { p.dead = true; continue; }
+        if (p.age > p.arm) {
+          for (const s of this.ships) {
+            if (s.team === p.team || s.sinking || (s.remote && s.seenT <= 0)) continue;
+            if (Math.hypot(s.x - p.x, s.y - p.y) > s.radius + 30) continue;
+            let touch = false;
+            for (const c of s.list) { if (c.dead) continue; const [wx, wy] = s.cellWorld(c); if (Math.hypot(wx - p.x, wy - p.y) < 24) { touch = true; break; } }
+            if (!touch) continue;
+            p.dead = true; this.blast(p.x, p.y, p.splash, p.dmg, p.team, p.owner, 'mine');
+            if (this.mode === 'online' && p.id && !s.remote) Online.send({ t: 'hit', id: p.id, x: p.x, y: p.y });
+            break;
+          }
+        }
+        continue;
+      }
+      if (p.kind === 'missile' || (p.kind === 'torp' && p.turn)) this.steerMissile(p, dt);
       const steps = Math.max(1, Math.ceil(Math.hypot(p.vx, p.vy) * dt / 8));
       for (let i = 0; i < steps && !p.dead; i++) {
         p.x += p.vx * dt / steps; p.y += p.vy * dt / steps;
         for (const s of this.ships) {
           if (s.team === p.team || s.sinking || (s.remote && s.seenT <= 0)) continue;
+          if (s.depth > DEEP && p.kind !== 'torp') continue;          // submerso: só torpedos o alcançam
           const c = s.cellAt(p.x, p.y);
           if (c && this.impactShot(p, s, c)) {
             p.dead = true;
-            if (this.mode === 'online' && p.id && s === this.player) Online.send({ t: 'hit', id: p.id, x: p.x, y: p.y });   // avisa que o tiro acabou
+            if (this.mode === 'online' && p.id && !s.remote) Online.send({ t: 'hit', id: p.id, x: p.x, y: p.y });   // avisa que o tiro acabou
             break;
           }
         }
@@ -1017,7 +1208,7 @@ const Battle = {
 
     /* câmera */
     const pl = this.player;
-    const tx = pl.x + (this.mouse.x - this.W / 2) * 0.2, ty = pl.y + (this.mouse.y - this.H / 2) * 0.2;
+    const tx = pl.x + (this.mouse.x - this.W / 2) / this.zoom * 0.2, ty = pl.y + (this.mouse.y - this.H / 2) / this.zoom * 0.2;
     const k = Math.min(1, dt * 5);
     this.cam.x += (tx - this.cam.x) * k; this.cam.y += (ty - this.cam.y) * k;
     this.shake = Math.max(0, this.shake - dt * 1.8);
@@ -1028,7 +1219,7 @@ const Battle = {
 
   /** efeito de uma bala em uma célula; retorna true se o projétil foi consumido */
   impactShot(p, s, c) {
-    if (p.kind === 'torp' || p.kind === 'missile') { this.blast(p.x, p.y, p.splash, p.dmg, p.team, p.owner); return true; }
+    if (p.kind === 'torp' || p.kind === 'missile') { this.blast(p.x, p.y, p.splash, p.dmg, p.team, p.owner, p.kind); return true; }
     if (p.kind === 'rail') {
       const hs = p.hit || (p.hit = new Set());
       if (hs.has(c)) return false;
@@ -1043,18 +1234,22 @@ const Battle = {
   },
 
   /** explosão em área: dano decai com a distância (casco reativo reduz pela metade) */
-  blast(x, y, radius, dmg, team, owner = null) {
-    this.explosion(x, y, Math.max(0.6, radius / 25));
+  blast(x, y, radius, dmg, team, owner = null, kind = 'torp', dmgSurf = null) {
+    const under = kind === 'torp' || kind === 'mine' || kind === 'depth';      // só estes alcançam submarinos submersos
+    if (kind === 'depth') { this.splash(x, y, 2.2); this.explosion(x, y, 0.7); } else this.explosion(x, y, Math.max(0.6, radius / 25));
     const reach = radius + CS * 0.5;
     for (const s of this.ships) {
       if (s.team === team || s.sinking) continue;
+      const deep = s.depth > DEEP;
+      if (deep && !under) continue;
+      const dm = kind === 'depth' && !deep ? (dmgSurf == null ? dmg * 0.3 : dmgSurf) : dmg;
       const hits = [];
       for (const c of s.list) {
         if (c.dead) continue;
         const [wx, wy] = s.cellWorld(c), d = Math.hypot(wx - x, wy - y);
         if (d < reach) hits.push([c, d]);
       }
-      for (const [c, d] of hits) s.hitCell(c, dmg * (1 - 0.6 * d / reach), true, owner);
+      for (const [c, d] of hits) s.hitCell(c, dm * (1 - 0.6 * d / reach), true, owner);
     }
   },
 
@@ -1080,7 +1275,20 @@ const Battle = {
     }
   },
 
+  skirmishEnd(win) {
+    this.state = win ? 'cleared' : 'over';
+    UI.overlay({
+      title: win ? 'Vitória! ⚓' : 'Seu navio afundou 💀',
+      html: `<p>${win ? 'Todos os bots foram afundados.' : 'Os bots venceram desta vez.'}<br>Bots afundados: <b>${this.kills}</b></p><p class="muted">Escaramuça: não rende moedas.</p>`,
+      buttons: [
+        { label: 'Jogar de novo', primary: true, onClick: () => { UI.hideOverlay(); Touch.show(true); Battle.start(Battle.design, 1, Battle.skirmish); } },
+        { label: 'Voltar ao estaleiro', onClick: () => UI.toYard() },
+      ],
+    });
+  },
+
   waveCleared() {
+    if (this.skirmish) return this.skirmishEnd(true);
     this.state = 'cleared';
     const bonus = 25 + this.wave * 10;
     Meta.coins += bonus; this.runCoins += bonus; Meta.best = Math.max(Meta.best, this.wave); Meta.save();
@@ -1096,6 +1304,7 @@ const Battle = {
   },
 
   gameOver() {
+    if (this.skirmish) return this.skirmishEnd(false);
     this.state = 'over';
     Meta.best = Math.max(Meta.best, this.wave - 1); Meta.save();
     UI.overlay({
@@ -1125,6 +1334,19 @@ const Battle = {
     h.vision.textContent = Math.round(p.vision);
     h['row-stealth'].style.display = p.cover > 0 ? '' : 'none';
     if (p.cover > 0) h['stealth-fill'].style.width = ((1 - p.sig) * 100).toFixed(0) + '%';
+    h['row-depth'].style.display = p.isSub ? '' : 'none';
+    h['row-batt'].style.display = p.isSub ? '' : 'none';
+    if (p.isSub) {
+      h['depth-fill'].style.width = (p.depth * 100).toFixed(0) + '%';
+      const bt = p.maxBattery ? p.battery / p.maxBattery : 0;
+      h['batt-fill'].style.width = (p.stats.nuclear ? 100 : bt * 100).toFixed(0) + '%';
+      h['batt-fill'].style.background = p.stats.nuclear ? '#8dffb0' : bt > 0.4 ? '#7bd86a' : bt > 0.15 ? '#f5b942' : '#ff5d5d';
+    }
+    h['row-mine'].style.display = w.mine === null ? 'none' : '';
+    if (w.mine !== null) h['cd-mine'].style.width = (w.mine * 100).toFixed(0) + '%';
+    const tb = document.getElementById('tbtn-dive'), tm = document.getElementById('tbtn-aux');
+    if (tb) { tb.classList.toggle('hidden', !p.isSub); tb.firstChild.textContent = p.diveCmd ? '⬆' : '⬇'; }
+    if (tm) tm.classList.toggle('hidden', w.mine === null);
     h['row-shield'].style.display = w.shield === null ? 'none' : '';
     if (w.shield !== null) h['shield-fill'].style.width = (w.shield * 100).toFixed(0) + '%';
   },
@@ -1132,12 +1354,13 @@ const Battle = {
   /* ----------------------------------------------------------- render */
   render() {
     const ctx = this.ctx, W = this.W, H = this.H;
+    if (this.W !== window.innerWidth || this.H !== window.innerHeight || !this.fogCv.width) this.resize();     // tela mudou de tamanho
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this.computeVisibility();
     this.drawWater();
     const sx = (Math.random() - 0.5) * this.shake * 14, sy = (Math.random() - 0.5) * this.shake * 14;
     ctx.save();
-    ctx.translate(W / 2 - this.cam.x + sx, H / 2 - this.cam.y + sy);
+    ctx.translate(W / 2 + sx, H / 2 + sy); ctx.scale(this.zoom, this.zoom); ctx.translate(-this.cam.x, -this.cam.y);
 
     // limite do mapa
     ctx.fillStyle = 'rgba(6,12,24,.72)';
@@ -1149,7 +1372,8 @@ const Battle = {
     ctx.strokeRect(-HALF, -HALF, WORLD, WORLD); ctx.setLineDash([]);
 
     this.drawParticles(0);
-    const shown = p => p.team === this.player.team || this.inVision(p.x, p.y);
+    const meT = this.player.team;
+    const shown = p => p.team === meT || (p.kind === 'mine' ? this.nearObserver(p.x, p.y, 150) : this.inVision(p.x, p.y));   // minas inimigas só aparecem de perto
     for (const p of this.shots) if (p.kind === 'mortar' && (shown(p) || this.inVision(p.tx, p.ty))) this.drawMortarMarker(p);
     for (const p of this.shots) if (p.kind === 'torp' && shown(p)) this.drawShot(p);
     for (const [sh, mode] of this.contacts) if (mode === 'full' && sh !== this.player) sh.draw(ctx, this.time);
@@ -1182,20 +1406,21 @@ const Battle = {
   },
 
   drawWater() {
-    const ctx = this.ctx, W = this.W, H = this.H, cam = this.cam, t = this.time;
+    const ctx = this.ctx, W = this.W, H = this.H, cam = this.cam, t = this.time, z = this.zoom;
     const g = ctx.createLinearGradient(0, 0, 0, H);
     g.addColorStop(0, '#17608c'); g.addColorStop(1, '#0d3f66');
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
-    const sp = 130, x0 = Math.floor((cam.x - W / 2) / sp) - 1, y0 = Math.floor((cam.y - H / 2) / sp) - 1;
+    const sp = 130, x0 = Math.floor((cam.x - W / (2 * z)) / sp) - 1, y0 = Math.floor((cam.y - H / (2 * z)) / sp) - 1;
     ctx.lineWidth = 2; ctx.lineCap = 'round';
     const hash = (a, b, n) => { const v = Math.sin(a * 127.1 + b * 311.7 + n * 74.7) * 43758.5453; return v - Math.floor(v); };
-    for (let j = 0; j < H / sp + 3; j++) for (let i = 0; i < W / sp + 3; i++) {
+    const nx = Math.ceil(W / (sp * z)) + 3, ny = Math.ceil(H / (sp * z)) + 3;
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
       const gx = x0 + i, gy = y0 + j, h1 = hash(gx, gy, 0), h2 = hash(gx, gy, 1);
-      const px = gx * sp + h1 * sp - cam.x + W / 2, py = gy * sp + h2 * sp - cam.y + H / 2;
+      const px = (gx * sp + h1 * sp - cam.x) * z + W / 2, py = (gy * sp + h2 * sp - cam.y) * z + H / 2;
       const al = 0.05 + 0.11 * (0.5 + 0.5 * Math.sin(t * 0.9 + h1 * 20));
       ctx.strokeStyle = `rgba(200,235,255,${al.toFixed(3)})`;
-      ctx.beginPath(); ctx.arc(px, py, 14 + h2 * 16, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
-      ctx.beginPath(); ctx.arc(px + 22, py + 12, 8 + h1 * 8, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke();
+      ctx.beginPath(); ctx.arc(px, py, (14 + h2 * 16) * z, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
+      ctx.beginPath(); ctx.arc(px + 22 * z, py + 12 * z, (8 + h1 * 8) * z, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke();
     }
   },
 
@@ -1236,6 +1461,21 @@ const Battle = {
         ctx.beginPath(); ctx.arc(0, 0, 3.6 + h * 3.2, 0, TAU); ctx.fill(); ctx.stroke();
         break;
       }
+      case 'mine': {
+        const armed = (p.age || 0) > p.arm;
+        ctx.fillStyle = '#3a414a'; ctx.strokeStyle = '#12161a'; ctx.lineWidth = 1.4;
+        ctx.beginPath(); ctx.arc(0, 0, 6, 0, TAU); ctx.fill(); ctx.stroke();
+        ctx.strokeStyle = '#6b7480'; for (let i = 0; i < 8; i++) { const a = i * TAU / 8; ctx.beginPath(); ctx.moveTo(Math.cos(a) * 6, Math.sin(a) * 6); ctx.lineTo(Math.cos(a) * 9, Math.sin(a) * 9); ctx.stroke(); }
+        ctx.fillStyle = armed && Math.sin(this.time * 8) > 0 ? '#ff4d4d' : '#6a2a2a'; ctx.beginPath(); ctx.arc(0, 0, 2.2, 0, TAU); ctx.fill();
+        break;
+      }
+      case 'depth':
+        if (!p.fused) {
+          const k = clamp(1 - p.life / p.T, 0, 1), h = 4 * k * (1 - k);
+          ctx.translate(0, -h * 30); ctx.fillStyle = '#4a5a3a'; ctx.strokeStyle = '#141a10'; ctx.lineWidth = 1.2;
+          ctx.beginPath(); ctx.arc(0, 0, 4 + h * 2, 0, TAU); ctx.fill(); ctx.stroke();
+        }
+        break;
       case 'flame': break;                                  // desenhado pelas partículas de fogo
       default:
         ctx.rotate(Math.atan2(p.vx, -p.vy));
@@ -1298,8 +1538,8 @@ const Battle = {
     const ctx = this.ctx, W = this.W, H = this.H, m = 26;
     for (const [s, mode] of this.contacts) {
       if (s.team === this.player.team || s.sinking) continue;
-      const sx = s.x - this.cam.x + W / 2, sy = s.y - this.cam.y + H / 2;
-      if (sx > -s.radius && sx < W + s.radius && sy > -s.radius && sy < H + s.radius) continue;
+      const z = this.zoom, sx = (s.x - this.cam.x) * z + W / 2, sy = (s.y - this.cam.y) * z + H / 2, rz = s.radius * z;
+      if (sx > -rz && sx < W + rz && sy > -rz && sy < H + rz) continue;
       const ex = clamp(sx, m, W - m), ey = clamp(sy, m + 50, H - m);
       const a = Math.atan2(sy - H / 2, sx - W / 2);
       ctx.save(); ctx.translate(ex, ey); ctx.rotate(a);
@@ -1316,7 +1556,7 @@ const Battle = {
     f.clearRect(0, 0, W, H); f.fillStyle = 'rgba(3,10,24,0.80)'; f.fillRect(0, 0, W, H);
     f.globalCompositeOperation = 'destination-out';
     for (const o of this.obs) {
-      const x = o.x - this.cam.x + W / 2, y = o.y - this.cam.y + H / 2, r = o.vision;
+      const z = this.zoom, x = (o.x - this.cam.x) * z + W / 2, y = (o.y - this.cam.y) * z + H / 2, r = o.vision * z;
       const g = f.createRadialGradient(x, y, r * 0.55, x, y, r);
       g.addColorStop(0, 'rgba(0,0,0,1)'); g.addColorStop(1, 'rgba(0,0,0,0)');
       f.fillStyle = g; f.beginPath(); f.arc(x, y, r, 0, TAU); f.fill();
@@ -1328,7 +1568,7 @@ const Battle = {
   /** contatos que só o sonar (ou uma revelação) mostra: silhueta vermelha dentro da escuridão */
   drawBlips() {
     const ctx = this.ctx, W = this.W, H = this.H;
-    ctx.save(); ctx.translate(W / 2 - this.cam.x, H / 2 - this.cam.y);
+    ctx.save(); ctx.translate(W / 2, H / 2); ctx.scale(this.zoom, this.zoom); ctx.translate(-this.cam.x, -this.cam.y);
     for (const [s, mode] of this.contacts) {
       if (mode !== 'blip' || s.sinking) continue;
       ctx.save(); ctx.translate(s.x, s.y); ctx.rotate(s.ang);
@@ -1360,7 +1600,7 @@ const Battle = {
     for (const c of this.player.list) if (c.top && PARTS[c.top.type].kind === 'mortar') splash = Math.max(splash, PARTS[c.top.type].splash);
     if (splash) {
       ctx.setLineDash([5, 5]); ctx.strokeStyle = 'rgba(245,185,66,.7)'; ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.arc(0, 0, splash, 0, TAU); ctx.stroke(); ctx.setLineDash([]);
+      ctx.beginPath(); ctx.arc(0, 0, splash * this.zoom, 0, TAU); ctx.stroke(); ctx.setLineDash([]);
     }
     ctx.restore();
   },
@@ -1375,7 +1615,8 @@ const Battle = {
       c.beginPath(); c.arc((o.x + HALF) * k, (o.y + HALF) * k, o.vision * k, 0, TAU); c.fill(); c.stroke();
     }
     c.strokeStyle = 'rgba(255,255,255,.25)'; c.lineWidth = 1;
-    c.strokeRect((this.cam.x - this.W / 2 + HALF) * k, (this.cam.y - this.H / 2 + HALF) * k, this.W * k, this.H * k);
+    const vw = this.W / this.zoom, vh = this.H / this.zoom;
+    c.strokeRect((this.cam.x - vw / 2 + HALF) * k, (this.cam.y - vh / 2 + HALF) * k, vw * k, vh * k);
     for (const [s, mode] of this.contacts) {
       if (s.sinking || s.dead) continue;
       const x = (s.x + HALF) * k, y = (s.y + HALF) * k;

@@ -51,6 +51,15 @@ const Online = {
     $('on-start').onclick = () => this.send({ t: 'start' });
     $('on-leave').onclick = () => this.leaveRoom();
     $('on-copy').onclick = () => this.copyLink();
+    const sel = $('ba-model');
+    sel.innerHTML = PRESETS.map(p => `<option value="${p.id}">${esc(p.name)} (poder ${p.power})</option>`).join('') + '<option value="meu">Clone do meu navio</option>';
+    $('ba-diff').innerHTML = Object.keys(BOT_DIFFS).map(k => `<option value="${k}">${BOT_DIFFS[k].name}</option>`).join('');
+    $('ba-diff').value = Meta.bots.diff;
+    $('ba-add').onclick = () => {
+      const m = { t: 'addBot', preset: sel.value, diff: $('ba-diff').value, team: $('ba-team').value };
+      if (sel.value === 'meu') m.design = Builder.getDesign();
+      this.send(m);
+    };
     for (const id of ['lb-mode', 'lb-budget', 'lb-kills', 'lb-min']) $(id).onchange = () => this.send({ t: 'settings', settings: this.formSettings('lb') });
     this.render();
     // convite por link: ?sala=CODIGO entra direto
@@ -99,7 +108,10 @@ const Online = {
         <span class="pl-name">${p.id === r.host ? '👑 ' : ''}${esc(p.name)}</span>
         ${r.settings.mode === 'teams' ? `<span class="team t${p.team}">Equipe ${p.team}</span>` : ''}
         <span class="pl-cost">${p.hasDesign ? '🪙 ' + p.cost : 'sem navio'}</span>
-        <span class="pl-ready ${p.ready || p.id === r.host ? 'on' : ''}">${p.id === r.host ? 'anfitrião' : p.ready ? 'pronto' : 'aguardando'}</span></div>`).join('');
+        <span class="pl-ready ${p.ready || p.id === r.host ? 'on' : ''}">${p.bot ? ((BOT_DIFFS[p.diff] || {}).name || 'bot') : p.id === r.host ? 'anfitrião' : p.ready ? 'pronto' : 'aguardando'}${p.bot && host ? ` <button class="x-btn" data-rm="${p.id}" title="Remover bot">✕</button>` : ''}</span></div>`).join('');
+    $('lobby-players').querySelectorAll('[data-rm]').forEach(b => b.onclick = () => this.send({ t: 'removeBot', id: b.dataset.rm }));
+    $('bot-add').classList.toggle('hidden', !host);
+    $('ba-team').classList.toggle('hidden', r.settings.mode !== 'teams');
     const budget = r.settings.budget ? r.settings.budget : '∞';
     const mine = Builder.analyze();
     $('lobby-ship').innerHTML = `Seu navio: <b>🪙 ${mine.stats.cost}</b> / ${budget}` +
@@ -287,7 +299,9 @@ const Online = {
       case 'died': this.onDied(m); break;
       case 'spawn':
         if (!this.inMatch) break;
-        if (m.id === this.id) { Battle.respawnMe(m.x, m.y, m.a); this.noticeT = 0; this.notice(''); } else Battle.remoteSpawn(m.id, m.x, m.y, m.a);
+        if (m.id === this.id) { Battle.respawnMe(m.x, m.y, m.a); this.noticeT = 0; this.notice(''); }
+        else if (Battle.localIds.has(m.id)) Battle.respawnBot(m.id, m.x, m.y, m.a);
+        else Battle.remoteSpawn(m.id, m.x, m.y, m.a);
         break;
       case 'score': this.scores = m.list; this.teams = m.teams; this.left = m.left; this.renderScore(); break;
       case 'end': this.onEnd(m); break;
@@ -312,10 +326,17 @@ const Online = {
   tick(dt, pl) {
     this.snapT += dt;
     if (this.noticeT > 0) { this.noticeT -= dt; if (this.noticeT > 0) this.notice('Afundado! Reaparecendo em ' + Math.ceil(this.noticeT) + ' s…'); }
-    if (this.snapT < 0.05 || pl.sinking || pl.dead) return;
+    if (this.snapT < 0.05) return;
     this.snapT = 0; this.snapN++;
+    if (!pl.sinking && !pl.dead) this.send(this.buildSnap(pl));
+    for (const b of Battle.localBots()) if (!b.sinking) { const m = this.buildSnap(b); m.as = b.id; this.send(m); }   // bots que eu hospedo
+  },
+
+  /** retrato de um navio que eu controlo (jogador ou bot) */
+  buildSnap(pl) {
     const m = { t: 'snap', x: +pl.x.toFixed(1), y: +pl.y.toFixed(1), a: +pl.ang.toFixed(3), vx: +pl.vx.toFixed(1), vy: +pl.vy.toFixed(1),
-      fl: +pl.flame.toFixed(2), sh: +pl.shield.toFixed(1), v: pl.vision, sp: pl.sonar, pr: pl.pingR, sg: +pl.sig.toFixed(3) };
+      fl: +pl.flame.toFixed(2), sh: +pl.shield.toFixed(1), v: pl.vision, sp: pl.sonar, pr: pl.pingR, sg: +pl.sig.toFixed(3),
+      dp: +pl.depth.toFixed(2), qt: +pl.quiet.toFixed(2) };
     if (this.snapN % 4 === 1) {
       const c = [];
       for (const k of pl.order) { const cell = pl.cells.get(k); if (!cell) c.push(-1, -1); else c.push(+cell.hp.toFixed(1), cell.top ? +cell.top.hp.toFixed(1) : -1); }
@@ -326,15 +347,15 @@ const Online = {
       for (const k of pl.order) { const cell = pl.cells.get(k); tp.push(cell && cell.top ? +cell.top.ang.toFixed(2) : 0); }
       m.tp = tp;
     }
-    this.send(m);
+    return m;
   },
 
-  sendShot(s) {
-    this.send({ t: 'shot', kind: s.kind, id: s.id, x: +s.x.toFixed(1), y: +s.y.toFixed(1), vx: +(s.vx || 0).toFixed(1), vy: +(s.vy || 0).toFixed(1),
+  sendShot(s, as) {
+    this.send({ t: 'shot', as: as || undefined, kind: s.kind, id: s.id, x: +s.x.toFixed(1), y: +s.y.toFixed(1), vx: +(s.vx || 0).toFixed(1), vy: +(s.vy || 0).toFixed(1),
       life: +s.life.toFixed(2), dmg: s.dmg, pierce: s.pierce || 0, big: !!s.big, splash: s.splash || 0, turn: s.turn || 0, ang: s.ang || 0, speed: s.speed || 0,
-      tx: s.tx || 0, ty: s.ty || 0, T: s.T || 0, x0: s.x0 || 0, y0: s.y0 || 0, tg: s.target ? s.target.id : '' });
+      tx: s.tx || 0, ty: s.ty || 0, T: s.T || 0, x0: s.x0 || 0, y0: s.y0 || 0, fuse: s.fuse || 0, dmgSurf: s.dmgSurf || 0, arm: s.arm || 0, tg: s.target ? s.target.id : '' });
   },
-  sendDied(by) { this.send({ t: 'died', by: by || '' }); },
+  sendDied(by, as) { this.send({ t: 'died', by: by || '', as: as || undefined }); },
   localDead() { this.noticeT = 5; this.notice('Afundado! Reaparecendo em 5 s…'); },
   notice(t) { const e = document.getElementById('on-notice'); e.textContent = t; e.classList.toggle('hidden', !t); },
 

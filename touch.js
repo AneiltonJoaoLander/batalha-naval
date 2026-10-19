@@ -9,7 +9,7 @@ const Touch = {
   enabled: false, root: null,
   move: { x: 0, y: 0, m: 0, id: null },
   aim: { x: 0, y: -1, m: 0, id: null, last: { x: 0, y: -1 }, dist: 450, used: false },
-  torp: false,
+  torp: false, aux: false,
 
   init() {
     this.enabled = ('ontouchstart' in window) || navigator.maxTouchPoints > 0 || (window.matchMedia && matchMedia('(pointer: coarse)').matches);
@@ -42,6 +42,11 @@ const Touch = {
     tb.addEventListener('pointerdown', e => { e.preventDefault(); this.torp = true; tb.classList.add('on'); SFX.init(); });
     const off = () => { this.torp = false; tb.classList.remove('on'); };
     tb.addEventListener('pointerup', off); tb.addEventListener('pointercancel', off); tb.addEventListener('pointerleave', off);
+    const dv = document.getElementById('tbtn-dive'), ax = document.getElementById('tbtn-aux');
+    dv.addEventListener('pointerdown', e => { e.preventDefault(); if (Battle.player) Battle.player.input.dive = true; SFX.init(); });
+    ax.addEventListener('pointerdown', e => { e.preventDefault(); this.aux = true; ax.classList.add('on'); });
+    const offAux = () => { this.aux = false; ax.classList.remove('on'); };
+    ax.addEventListener('pointerup', offAux); ax.addEventListener('pointercancel', offAux); ax.addEventListener('pointerleave', offAux);
     document.getElementById('tbtn-pause').addEventListener('click', () => Battle.togglePause());
     document.addEventListener('gesturestart', e => e.preventDefault());      // sem zoom por pinça
   },
@@ -50,7 +55,7 @@ const Touch = {
   show(on) {
     if (!this.enabled || !this.root) return;
     this.root.classList.toggle('hidden', !on);
-    this.move.id = this.aim.id = null; this.move.m = this.aim.m = 0; this.torp = false;
+    this.move.id = this.aim.id = null; this.move.m = this.aim.m = 0; this.torp = false; this.aux = false;
     if (on) {
       try {
         const el = document.documentElement;
@@ -77,12 +82,13 @@ const Touch = {
       const l = am.last, n = Math.hypot(l.x, l.y) || 1;
       i.aimX = p.x + l.x / n * am.dist; i.aimY = p.y + l.y / n * am.dist;
       i.fireMain = am.id !== null && am.m > 0.3;
-      B.mouse.x = B.W / 2 + (i.aimX - B.cam.x); B.mouse.y = B.H / 2 + (i.aimY - B.cam.y);
+      B.mouse.x = B.W / 2 + (i.aimX - B.cam.x) * B.zoom; B.mouse.y = B.H / 2 + (i.aimY - B.cam.y) * B.zoom;
     } else if (this.enabled && !B.mouse.moved) {                           // ainda sem mira: aponta para a proa
       const fx = Math.sin(p.ang), fy = -Math.cos(p.ang);
       i.aimX = p.x + fx * 450; i.aimY = p.y + fy * 450;
-      B.mouse.x = B.W / 2 + (i.aimX - B.cam.x); B.mouse.y = B.H / 2 + (i.aimY - B.cam.y);
+      B.mouse.x = B.W / 2 + (i.aimX - B.cam.x) * B.zoom; B.mouse.y = B.H / 2 + (i.aimY - B.cam.y) * B.zoom;
     }
     if (this.torp) { i.fireTorp = true; i.fireMissile = true; }
+    if (this.aux) i.fireAux = true;
   },
 };

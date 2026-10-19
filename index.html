@@ -23,6 +23,8 @@
     <div class="meta">
       <span title="Moedas ganhas em batalha aumentam seu orçamento">🪙 <b id="coins">0</b> moedas</span>
       <span title="Maior onda concluída">🏆 Melhor onda: <b id="best">0</b></span>
+      <button class="btn small" id="btn-bots" title="Dificuldade e modelos dos bots, escaramuça">🤖 Bots</button>
+      <button class="btn small" id="btn-opts" title="Zoom da batalha">⚙ Opções</button>
       <button class="btn small online" id="btn-online" title="Jogar contra outros jogadores">🌐 Jogar online</button>
       <button class="btn small danger" id="btn-reset" title="Apaga moedas, recorde e navio salvo">↺ Resetar jogo</button>
     </div>
@@ -128,6 +130,10 @@
       <div class="lobby-grid">
         <div>
           <div id="lobby-players"></div>
+          <div id="bot-add" class="bot-add hidden">
+            <h3 class="sub">🤖 Adicionar bot <small>(roda no seu navegador)</small></h3>
+            <div class="bot-line"><select id="ba-model"></select><select id="ba-diff"></select><select id="ba-team" class="hidden"><option value="">Equipe auto</option><option value="A">Equipe A</option><option value="B">Equipe B</option></select><button class="btn" id="ba-add">+ Adicionar</button></div>
+          </div>
           <p id="lobby-ship" class="ship-line"></p>
           <div class="row-tools">
             <button class="btn small" id="on-send-ship" title="Reenviar o navio atual">↻ Reenviar navio</button>
@@ -174,6 +180,12 @@
       <div class="bar"><div id="hud-cd-cannon" class="amber"></div></div></div>
     <div class="bar-row" id="hud-row-mortar"><label>Morteiro</label>
       <div class="bar"><div id="hud-cd-mortar" class="green"></div></div></div>
+    <div class="bar-row" id="hud-row-mine" style="display:none"><label>Minas</label>
+      <div class="bar"><div id="hud-cd-mine" class="amber"></div></div></div>
+    <div class="bar-row" id="hud-row-depth" style="display:none"><label>Profund.</label>
+      <div class="bar"><div id="hud-depth-fill" class="blue"></div></div></div>
+    <div class="bar-row" id="hud-row-batt" style="display:none"><label>Bateria</label>
+      <div class="bar"><div id="hud-batt-fill" class="green"></div></div></div>
     <div class="bar-row" id="hud-row-torp"><label>Torp./míssil</label>
       <div class="bar"><div id="hud-cd-torp" class="red"></div></div></div>
     <div class="bar-row" id="hud-row-shield"><label>Escudo</label>
@@ -187,13 +199,15 @@
 
   <div class="help">
     <b>W/S</b> acelerar/ré · <b>A/D</b> girar · <b>Mouse</b> mirar · <b>Botão esq.</b> canhões e morteiros ·
-    <b>Espaço / botão dir.</b> torpedos e mísseis · <b>P</b> pausa · <b>M</b> som
+    <b>Espaço / botão dir.</b> torpedos e mísseis · <b>V</b> mergulhar · <b>F</b> minas · <b>−/+</b> zoom · <b>P</b> pausa · <b>M</b> som
   </div>
 
   <div id="touch" class="hidden">
     <div class="stick left" id="stick-move"><div class="knob"></div><span>mover</span></div>
     <div class="stick right" id="stick-aim"><div class="knob"></div><span>mirar / atirar</span></div>
     <button class="tbtn" id="tbtn-torp">🚀<small>torp./míssil</small></button>
+    <button class="tbtn dive hidden" id="tbtn-dive">⬇<small>mergulhar</small></button>
+    <button class="tbtn aux hidden" id="tbtn-aux">💣<small>minas</small></button>
     <button class="tbtn pause" id="tbtn-pause">❚❚</button>
   </div>
   <div id="rotate-hint" class="rotate-hint">↻ Gire o celular para o modo paisagem</div>
@@ -208,6 +222,40 @@
     </div>
   </div>
 </main>
+
+<!-- =============== BOTS / OPÇÕES (janelas) =============== -->
+<div id="modal-bots" class="modal hidden">
+  <div class="modal-card">
+    <h2>🤖 Bots</h2>
+    <div class="modal-body">
+      <p class="muted">Vale para a campanha, a escaramuça e as salas online que você hospedar.</p>
+      <div class="grid3">
+        <label class="field">Dificuldade <select id="bots-diff"></select></label>
+        <label class="field">Quantidade na campanha <select id="bots-mult"><option value="0.5">0,5×</option><option value="1">1×</option><option value="1.5">1,5×</option><option value="2">2×</option><option value="3">3×</option></select></label>
+        <label class="field">Onda inicial <select id="bots-wave"></select></label>
+      </div>
+      <p class="muted" id="bots-diff-desc"></p>
+      <h3 class="sub">Modelos que podem aparecer na campanha <button class="btn small" id="bots-all">todos</button> <button class="btn small" id="bots-none">nenhum</button></h3>
+      <div id="bots-allowed" class="chips-grid"></div>
+      <h3 class="sub">Escaramuça: monte a sua batalha</h3>
+      <div id="bots-skirm" class="steppers"></div>
+      <p class="muted" id="bots-sum"></p>
+    </div>
+    <div class="btns row"><button class="btn primary big" id="bots-skirm-start">⚔ Iniciar escaramuça</button><button class="btn big" id="bots-close">Fechar</button></div>
+  </div>
+</div>
+<div id="modal-opts" class="modal hidden">
+  <div class="modal-card small">
+    <h2>⚙ Opções</h2>
+    <div class="modal-body">
+      <label class="field">Zoom da batalha: <b id="zoom-val"></b>
+        <input type="range" id="zoom-range" min="35" max="160" step="5"></label>
+      <p class="muted">Menos zoom = você vê uma área maior da tela. Na batalha: roda do mouse ou teclas <b>−</b> / <b>+</b>.</p>
+      <button class="btn small" id="zoom-reset">Restaurar padrão</button>
+    </div>
+    <div class="btns row"><button class="btn primary big" id="opts-close">Fechar</button></div>
+  </div>
+</div>
 
 <script src="parts.js"></script>
 <script src="gameserver.js"></script>

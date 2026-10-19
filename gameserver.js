@@ -12,13 +12,13 @@
 (function (root) {
 const G = (typeof module !== 'undefined' && module.exports)
   ? require('./parts.js')
-  : { VERSION, validateDesign, detects };                       // globais de parts.js no navegador
+  : { VERSION, DEEP, PRESETS, validateDesign, detects };                       // globais de parts.js no navegador
 
 const MAX_PLAYERS = 8;
 const MAX_ROOMS = 60;
 const RESPAWN_MS = 5000;
 const HALF = 1800;                                   // meio-lado do mapa (mundo de 3600)
-const SHOT_KINDS = new Set(['shell', 'bullet', 'heavy', 'flame', 'rail', 'mortar', 'torp', 'missile']);
+const SHOT_KINDS = new Set(['shell', 'bullet', 'heavy', 'flame', 'rail', 'mortar', 'torp', 'missile', 'mine', 'depth']);
 const LOUD_SHOTS = new Set(['shell', 'rail', 'mortar', 'torp', 'missile']);   // revelam quem atira
 
 function createGameServer() {
@@ -53,7 +53,7 @@ function cleanSettings(s, old) {
 
 function assignTeams(r) {
   let i = 0;
-  for (const p of r.players.values()) { p.team = r.settings.mode === 'teams' ? (i % 2 ? 'B' : 'A') : 'p' + p.id; i++; }
+  for (const p of r.players.values()) { p.team = r.settings.mode === 'teams' ? (p.teamPref || (i % 2 ? 'B' : 'A')) : 'p' + p.id; i++; }
 }
 
 function roomInfo(r) {
@@ -62,7 +62,7 @@ function roomInfo(r) {
     endsAt: r.endsAt || 0,
     players: [...r.players.values()].map(p => ({
       id: p.id, name: p.name, team: p.team, ready: p.ready, cost: p.stats ? p.stats.cost : 0, hasDesign: !!p.design,
-      kills: p.kills, deaths: p.deaths,
+      kills: p.kills, deaths: p.deaths, bot: !!p.isBot, diff: p.diff || '', owner: p.owner || '',
     })),
   };
 }
@@ -80,8 +80,11 @@ function scoreboard(r) {
 /* ------------------------------------------------------------------ detecção */
 const dstate = (p, now) => ({
   x: p.x, y: p.y, vision: p.vision, sonar: p.sonar, pingR: p.pingR, ping: now < p.pingUntil,
-  sig: p.sig, reveal: now < p.revealUntil, revealR: p.revealR,
+  sig: p.sig, reveal: now < p.revealUntil, revealR: p.revealR, sub: p.sub, quiet: p.quiet,
 });
+/** bots controlados (hospedados) pelo jogador q */
+const botsOf = (r, q) => { const out = []; for (const b of r.players.values()) if (b.owner === q.id) out.push(b); return out; };
+
 /** o jogador q (ou um aliado dele) enxerga p? */
 function canSee(r, q, p, now) {
   if (q.team === p.team || !q.alive) return true;                 // aliados e espectadores veem tudo
@@ -109,12 +112,14 @@ function leaveRoom(p) {
   if (!r) return;
   clearTimeout(p.respawnTimer);
   r.players.delete(p.id); p.room = null; p.ready = false; p.alive = false;
-  if (!r.players.size) { clearInterval(r.tick); rooms.delete(r.code); return; }
-  if (r.hostId === p.id) r.hostId = r.players.keys().next().value;
+  for (const b of [...r.players.values()]) if (b.owner === p.id) { clearTimeout(b.respawnTimer); r.players.delete(b.id); }   // os bots de quem saiu somem
+  const humans = [...r.players.values()].filter(q => !q.isBot);
+  if (!humans.length) { clearInterval(r.tick); rooms.delete(r.code); return; }
+  if (r.hostId === p.id) r.hostId = humans[0].id;
   assignTeams(r);
   broadcast(r, { t: 'left', id: p.id });
   broadcastRoom(r);
-  if (r.state === 'playing' && r.players.size < 2) endMatch(r, 'Os outros jogadores saíram.');
+  if (r.state === 'playing' && humans.length < 1 || (r.state === 'playing' && r.players.size < 2)) endMatch(r, 'Os outros jogadores saíram.');
 }
 
 function joinRoom(p, r) {
@@ -144,12 +149,12 @@ function startMatch(r) {
   assignTeams(r);
   const spawns = {};
   for (const p of r.players.values()) {
-    p.kills = p.deaths = 0; p.alive = true; p.ready = false; p.lastSnapAt = 0;
-    p.vision = p.stats.vision; p.sonar = p.stats.sonarR; p.pingR = p.stats.pingR; p.sig = p.stats.sig;
+    p.kills = p.deaths = 0; p.alive = true; p.ready = !!p.isBot; p.lastSnapAt = 0;
+    p.vision = p.stats.vision; p.sonar = p.stats.sonarR; p.pingR = p.stats.pingR; p.sig = p.stats.sig; p.dp = 0; p.sub = false; p.quiet = 1;
     p.revealUntil = p.pingUntil = 0; p.revealR = 0;
     const sp = spawnPoint(r, p); p.x = sp.x; p.y = sp.y; spawns[p.id] = sp;
   }
-  const list = [...r.players.values()].map(p => ({ id: p.id, name: p.name, team: p.team, design: p.design }));
+  const list = [...r.players.values()].map(p => ({ id: p.id, name: p.name, team: p.team, design: p.design, bot: !!p.isBot, owner: p.owner || '', diff: p.diff || '' }));
   for (const p of r.players.values()) tell(p, { t: 'start', you: p.id, settings: r.settings, players: list, spawns, endsAt: r.endsAt });
 }
 
@@ -158,7 +163,7 @@ function endMatch(r, reason) {
   r.state = 'lobby'; r.endsAt = 0;
   const sb = scoreboard(r);
   broadcast(r, { t: 'end', ranking: sb.list, teams: sb.teams, reason: reason || '' });
-  for (const p of r.players.values()) { clearTimeout(p.respawnTimer); p.ready = false; p.alive = false; }
+  for (const p of r.players.values()) { clearTimeout(p.respawnTimer); p.ready = !!p.isBot; p.alive = false; }
   broadcastRoom(r);
 }
 
@@ -184,7 +189,12 @@ function onMessage(p, raw) {
   if (!m || typeof m.t !== 'string') return;
   const now = Date.now();
   if (now - p.rateT > 1000) { p.rateT = now; p.rateN = 0; }
-  if (++p.rateN > 400) return;                                   // anti-flood
+  if (++p.rateN > 1500) return;                                  // anti-flood
+  // o anfitrião pode agir em nome dos próprios bots: { as: idDoBot }
+  if (m.as && (m.t === 'snap' || m.t === 'shot' || m.t === 'ping' || m.t === 'died') && p.room) {
+    const b = p.room.players.get(String(m.as).slice(0, 12));
+    if (b && b.isBot && b.owner === p.id) p = b;
+  }
 
   const r = p.room;
   switch (m.t) {
@@ -210,8 +220,32 @@ function onMessage(p, raw) {
     case 'settings':
       if (r && r.state === 'lobby' && r.hostId === p.id) {
         r.settings = cleanSettings(m.settings, r.settings); assignTeams(r);
-        for (const q of r.players.values()) { q.ready = false; if (q.design) revalidate(q, r); }
+        for (const q of r.players.values()) { q.ready = !!q.isBot; if (q.design && !q.isBot) revalidate(q, r); }
         broadcastRoom(r);
+      }
+      break;
+    case 'addBot':
+      if (r && r.state === 'lobby' && r.hostId === p.id) {
+        if (r.players.size >= MAX_PLAYERS) return tell(p, { t: 'error', msg: 'Sala cheia.' });
+        let design = null, name = '';
+        const pre = G.PRESETS.find(x => x.id === m.preset);
+        if (pre) { design = pre.design; name = pre.name; } else if (m.preset === 'meu' && m.design) { design = m.design; name = 'Clone'; }
+        if (!design) return tell(p, { t: 'error', msg: 'Modelo de bot inválido.' });
+        const v = G.validateDesign(design, 0);
+        if (!v.ok) return tell(p, { t: 'error', msg: 'Bot inválido: ' + v.error });
+        const diff = ['facil', 'normal', 'dificil', 'mestre'].includes(m.diff) ? m.diff : 'normal';
+        let n = 1; for (const q of r.players.values()) if (q.isBot && q.name.replace(/ \d+$/, '') === '🤖 ' + name) n++;
+        const id = 'b' + (nextId++);
+        r.players.set(id, { id, isBot: true, owner: p.id, send: () => {}, name: '🤖 ' + name + (n > 1 ? ' ' + n : ''), room: r, design, stats: v.stats, ready: true,
+          team: '', teamPref: (m.team === 'A' || m.team === 'B') ? m.team : '', diff, kills: 0, deaths: 0, alive: false,
+          x: 0, y: 0, vision: 650, sonar: 0, pingR: 0, sig: 1, sub: false, quiet: 1, dp: 0, revealUntil: 0, revealR: 0, pingUntil: 0, lastSnapAt: 0, rateT: 0, rateN: 0, respawnTimer: null });
+        assignTeams(r); broadcastRoom(r);
+      }
+      break;
+    case 'removeBot':
+      if (r && r.state === 'lobby' && r.hostId === p.id) {
+        const b = r.players.get(clean(m.id, 12));
+        if (b && b.isBot) { r.players.delete(b.id); assignTeams(r); broadcastRoom(r); }
       }
       break;
     case 'design':
@@ -248,15 +282,22 @@ function onMessage(p, raw) {
       p.sonar = num(m.sp, 0, p.stats.sonarR, 0);
       p.pingR = num(m.pr, 0, p.stats.pingR, 0);
       p.sig = num(m.sg, p.stats.sig, 1, 1);
+      p.dp = p.stats.sub ? num(m.dp, 0, 1) : 0; p.sub = p.dp > G.DEEP; p.quiet = num(m.qt, p.stats.quiet * 0.5, 1, 1);
       const out = { t: 'snap', id: p.id, x, y, a: num(m.a, -50, 50), vx: num(m.vx, -400, 400), vy: num(m.vy, -400, 400),
-        fl: num(m.fl, 0, 1), sh: num(m.sh, 0, 500), v: p.vision, sp: p.sonar, pr: p.pingR, sg: p.sig };
+        fl: num(m.fl, 0, 1), sh: num(m.sh, 0, 500), v: p.vision, sp: p.sonar, pr: p.pingR, sg: p.sig, dp: p.dp, qt: p.quiet };
       if (Array.isArray(m.c) && m.c.length <= 700) out.c = m.c;
       if (Array.isArray(m.tp) && m.tp.length <= 350) out.tp = m.tp;
       const nowT = Date.now();
       if (nowT < p.revealUntil) out.rv = p.revealR;
       if (nowT < p.pingUntil) out.pg = 1;
       const s = JSON.stringify(out);
-      for (const q of r.players.values()) if (q !== p && canSee(r, q, p, nowT)) tell(q, s);
+      for (const q of r.players.values()) {
+        if (q === p || q.isBot || q.id === p.owner) continue;
+        const mine = [q, ...botsOf(r, q)];
+        if (mine.length === 1) { if (canSee(r, q, p, nowT)) tell(q, s); continue; }
+        const vis = mine.filter(o => (o === q || o.alive) && canSee(r, o, p, nowT)).map(o => o.id);   // quais dos meus (eu e meus bots) enxergam
+        if (vis.length) tell(q, JSON.stringify(Object.assign({}, out, { vis })));
+      }
       break;
     }
     case 'shot': {
@@ -266,12 +307,13 @@ function onMessage(p, raw) {
       const sh = { t: 'shot', kind: m.kind, id: clean(m.id, 24), owner: p.id, team: p.team,
         x: +m.x, y: +m.y, vx: num(m.vx, -1500, 1500), vy: num(m.vy, -1500, 1500), life: num(m.life, 0, 6), dmg: num(m.dmg, 0, 16),
         pierce: num(m.pierce, 0, 4), big: !!m.big, splash: num(m.splash, 0, 70), turn: num(m.turn, 0, 4), ang: num(m.ang, -50, 50), speed: num(m.speed, 0, 1200),
-        tx: num(m.tx, -4000, 4000), ty: num(m.ty, -4000, 4000), T: num(m.T, 0, 6), x0: num(m.x0, -4000, 4000), y0: num(m.y0, -4000, 4000), tg: clean(m.tg, 12) };
+        tx: num(m.tx, -4000, 4000), ty: num(m.ty, -4000, 4000), T: num(m.T, 0, 6), x0: num(m.x0, -4000, 4000), y0: num(m.y0, -4000, 4000), tg: clean(m.tg, 12),
+        fuse: num(m.fuse, 0, 4), dmgSurf: num(m.dmgSurf, 0, 16), arm: num(m.arm, 0, 6) };
       if (LOUD_SHOTS.has(m.kind)) { p.revealUntil = now + 1500; p.revealR = 900; }
       const s = JSON.stringify(sh);
       for (const q of r.players.values()) {
-        if (q === p) continue;
-        if (q.team === p.team || !q.alive || Math.hypot(q.x - sh.x, q.y - sh.y) < 2600) tell(q, s);
+        if (q === p || q.isBot || q.id === p.owner) continue;
+        if (q.team === p.team || !q.alive || [q, ...botsOf(r, q)].some(o => Math.hypot(o.x - sh.x, o.y - sh.y) < 2600)) tell(q, s);
       }
       break;
     }
@@ -296,7 +338,7 @@ function onMessage(p, raw) {
           if (r.state !== 'playing' || !r.players.has(p.id)) return;
           p.alive = true; p.lastSnapAt = 0;
           const sp = spawnPoint(r, p); p.x = sp.x; p.y = sp.y;
-          p.vision = p.stats.vision; p.sonar = p.stats.sonarR; p.pingR = p.stats.pingR; p.sig = p.stats.sig;
+          p.vision = p.stats.vision; p.sonar = p.stats.sonarR; p.pingR = p.stats.pingR; p.sig = p.stats.sig; p.dp = 0; p.sub = false; p.quiet = 1;
           p.revealUntil = p.pingUntil = 0;
           broadcast(r, { t: 'spawn', id: p.id, x: sp.x, y: sp.y, a: sp.a });
         }, RESPAWN_MS);
@@ -317,7 +359,7 @@ function revalidate(q, r) {
 /** registra um novo cliente; sendFn(texto) entrega mensagens a ele */
 function connect(sendFn) {
   const p = { id: 'u' + (nextId++), send: sendFn, name: '', room: null, design: null, stats: null, ready: false, team: '', kills: 0, deaths: 0, alive: false,
-    x: 0, y: 0, vision: 650, sonar: 0, pingR: 0, sig: 1, revealUntil: 0, revealR: 0, pingUntil: 0, lastSnapAt: 0, rateT: 0, rateN: 0, respawnTimer: null };
+    x: 0, y: 0, vision: 650, sonar: 0, pingR: 0, sig: 1, sub: false, quiet: 1, dp: 0, revealUntil: 0, revealR: 0, pingUntil: 0, lastSnapAt: 0, rateT: 0, rateN: 0, respawnTimer: null };
   players.add(p);
   tell(p, { t: 'hi', id: p.id, version: G.VERSION });
   return p;
