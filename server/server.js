@@ -46,7 +46,7 @@ const wss = new WebSocketServer({ server, maxPayload: 128 * 1024 });
 wss.on('connection', ws => {
   if (gs.players.size >= 400) { ws.close(1013, 'cheio'); return; }
   ws.isAlive = true;
-  const p = gs.connect(s => { if (ws.readyState === 1) ws.send(s); });
+  const p = gs.connect(s => { if (ws.readyState === 1) ws.send(s); }, () => ws.close());
   ws.on('message', data => gs.message(p, data.toString()));
   ws.on('pong', () => { ws.isAlive = true; });
   ws.on('close', () => gs.disconnect(p));

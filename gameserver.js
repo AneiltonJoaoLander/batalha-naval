@@ -16,8 +16,6 @@ const G = (typeof module !== 'undefined' && module.exports)
 
 const MAX_PLAYERS = 8;
 const MAX_ROOMS = 60;
-const RESPAWN_MS = 5000;
-const HALF = 1800;                                   // meio-lado do mapa (mundo de 3600)
 const SHOT_KINDS = new Set(['shell', 'bullet', 'heavy', 'flame', 'rail', 'mortar', 'torp', 'missile', 'mine', 'depth']);
 const LOUD_SHOTS = new Set(['shell', 'rail', 'mortar', 'torp', 'missile']);   // revelam quem atira
 
@@ -42,14 +40,29 @@ function roomCode(wanted) {
   return null;
 }
 
-function cleanSettings(s, old) {
+function cleanSettings(s, old, minPlayers = 2) {
   s = s || {};
-  const mode = s.mode === 'teams' ? 'teams' : 'ffa';
-  const budget = [0, 200, 300, 450, 700, 1000, 1500].includes(+s.budget) ? +s.budget : (old ? old.budget : 450);
-  const killLimit = [5, 10, 15, 20, 30, 50].includes(+s.killLimit) ? +s.killLimit : (old ? old.killLimit : 15);
-  const minutes = [0, 5, 10, 15, 20].includes(+s.minutes) ? +s.minutes : (old ? old.minutes : 10);
-  return { mode, budget, killLimit, minutes };
+  const o = old || {};
+  const pick = (v, list, d) => list.includes(+v) ? +v : d;
+  const bool = (v, d) => v === undefined ? d : !!v;
+  return {
+    mode: s.mode === 'teams' ? 'teams' : (s.mode === 'ffa' ? 'ffa' : (o.mode || 'ffa')),
+    budget: pick(s.budget, [0, 200, 300, 450, 700, 1000, 1500], o.budget !== undefined ? o.budget : 450),
+    killLimit: pick(s.killLimit, [5, 10, 15, 20, 30, 50], o.killLimit || 15),
+    minutes: pick(s.minutes, [0, 5, 10, 15, 20], o.minutes !== undefined ? o.minutes : 10),
+    maxPlayers: Math.max(minPlayers, pick(s.maxPlayers, [2, 3, 4, 5, 6, 7, 8], o.maxPlayers || 8)),
+    respawn: pick(s.respawn, [1, 3, 5, 8, 12, 15], o.respawn || 5),
+    arena: pick(s.arena, [2400, 3600, 5000], o.arena || 3600),
+    fog: bool(s.fog, o.fog !== undefined ? o.fog : true),
+    ff: bool(s.ff, !!o.ff),
+    allowSub: bool(s.allowSub, o.allowSub !== undefined ? o.allowSub : true),
+    allowStealth: bool(s.allowStealth, o.allowStealth !== undefined ? o.allowStealth : true),
+    allowGuided: bool(s.allowGuided, o.allowGuided !== undefined ? o.allowGuided : true),
+    locked: bool(s.locked, !!o.locked),
+    pass: (s.setPass || !old) && typeof s.pass === 'string' ? clean(s.pass, 8) : (o.pass || ''),   // só muda se pedirem (evita apagar a senha ao mexer em outra regra)
+  };
 }
+const halfOf = r => (r.settings.arena || 3600) / 2;
 
 function assignTeams(r) {
   let i = 0;
@@ -58,7 +71,8 @@ function assignTeams(r) {
 
 function roomInfo(r) {
   return {
-    code: r.code, host: r.hostId, settings: r.settings, state: r.state,
+    code: r.code, host: r.hostId, state: r.state, paused: !!r.paused,
+    settings: Object.assign({}, r.settings, { pass: undefined, hasPass: !!r.settings.pass }),
     endsAt: r.endsAt || 0,
     players: [...r.players.values()].map(p => ({
       id: p.id, name: p.name, team: p.team, ready: p.ready, cost: p.stats ? p.stats.cost : 0, hasDesign: !!p.design,
@@ -87,7 +101,7 @@ const botsOf = (r, q) => { const out = []; for (const b of r.players.values()) i
 
 /** o jogador q (ou um aliado dele) enxerga p? */
 function canSee(r, q, p, now) {
-  if (q.team === p.team || !q.alive) return true;                 // aliados e espectadores veem tudo
+  if (!r.settings.fog || q.team === p.team || !q.alive) return true;                 // aliados e espectadores veem tudo
   const t = dstate(p, now);
   for (const o of r.players.values()) if (o.alive && o.team === q.team && G.detects(dstate(o, now), t)) return true;
   return false;
@@ -96,12 +110,12 @@ function canSee(r, q, p, now) {
 function spawnPoint(r, self) {
   let best = null, bd = -1;
   for (let k = 0; k < 24; k++) {
-    const a = rnd(0, Math.PI * 2), d = rnd(900, 1450);
+    const H = halfOf(r), a = rnd(0, Math.PI * 2), d = rnd(H * 0.5, H * 0.8);
     const x = Math.sin(a) * d, y = -Math.cos(a) * d;
     let md = 1e9;
     for (const o of r.players.values()) if (o !== self && o.alive) md = Math.min(md, Math.hypot(o.x - x, o.y - y));
     if (md > bd) { bd = md; best = { x, y }; }
-    if (md > 900) break;
+    if (md > halfOf(r) * 0.5) break;
   }
   return { x: Math.round(best.x), y: Math.round(best.y), a: +Math.atan2(-best.x, best.y).toFixed(3) };
 }
@@ -122,10 +136,15 @@ function leaveRoom(p) {
   if (r.state === 'playing' && humans.length < 1 || (r.state === 'playing' && r.players.size < 2)) endMatch(r, 'Os outros jogadores saíram.');
 }
 
-function joinRoom(p, r) {
+function joinRoom(p, r, pass, asHost) {
   if (p.room) leaveRoom(p);
-  if (r.players.size >= MAX_PLAYERS) return tell(p, { t: 'error', msg: 'Sala cheia.' });
-  if (r.state === 'playing') return tell(p, { t: 'error', msg: 'A partida já começou.' });
+  if (!asHost) {
+    if (r.state === 'playing') return tell(p, { t: 'error', msg: 'A partida já começou.' });
+    if (r.bans.has(String(p.name).toLowerCase())) return tell(p, { t: 'error', msg: 'Você foi banido desta sala.' });
+    if (r.settings.locked) return tell(p, { t: 'error', msg: 'A sala está trancada pelo anfitrião.' });
+    if (r.settings.pass && clean(pass, 8) !== r.settings.pass) return tell(p, { t: 'error', msg: 'Esta sala tem senha. Digite a senha correta.', needPass: true });
+  }
+  if (r.players.size >= Math.min(MAX_PLAYERS, r.settings.maxPlayers || MAX_PLAYERS)) return tell(p, { t: 'error', msg: 'Sala cheia.' });
   r.players.set(p.id, p); p.room = r; p.ready = false; p.kills = p.deaths = 0; p.alive = false;
   assignTeams(r);
   tell(p, { t: 'joined', code: r.code });
@@ -136,15 +155,15 @@ function createRoom(p, settings, wantedCode) {
   if (rooms.size >= MAX_ROOMS) return tell(p, { t: 'error', msg: 'Servidor cheio. Tente mais tarde.' });
   const code = roomCode(wantedCode);
   if (!code) return tell(p, { t: 'error', msg: 'Não foi possível criar a sala.' });
-  const r = { code, hostId: p.id, settings: cleanSettings(settings), players: new Map(), state: 'lobby', startedAt: 0, endsAt: 0, tick: null };
+  const r = { code, hostId: p.id, settings: cleanSettings(settings), players: new Map(), state: 'lobby', startedAt: 0, endsAt: 0, tick: null, paused: false, bans: new Set() };
   r.tick = setInterval(() => roomTick(r), 1000);
   rooms.set(code, r);
-  joinRoom(p, r);
+  joinRoom(p, r, '', true);
 }
 
 function startMatch(r) {
   const now = Date.now();
-  r.state = 'playing'; r.startedAt = now;
+  r.state = 'playing'; r.startedAt = now; r.paused = false;
   r.endsAt = r.settings.minutes ? now + r.settings.minutes * 60000 : 0;
   assignTeams(r);
   const spawns = {};
@@ -160,7 +179,7 @@ function startMatch(r) {
 
 function endMatch(r, reason) {
   if (r.state !== 'playing') return;
-  r.state = 'lobby'; r.endsAt = 0;
+  r.state = 'lobby'; r.endsAt = 0; r.paused = false;
   const sb = scoreboard(r);
   broadcast(r, { t: 'end', ranking: sb.list, teams: sb.teams, reason: reason || '' });
   for (const p of r.players.values()) { clearTimeout(p.respawnTimer); p.ready = !!p.isBot; p.alive = false; }
@@ -170,6 +189,7 @@ function endMatch(r, reason) {
 function roomTick(r) {
   if (r.state !== 'playing') return;
   const now = Date.now();
+  if (r.paused) { broadcast(r, { t: 'score', list: scoreboard(r).list, teams: scoreboard(r).teams, left: r.endsAt ? Math.max(0, Math.round((r.endsAt - r.pausedAt) / 1000)) : -1 }); return; }
   if (r.endsAt && now >= r.endsAt) return endMatch(r, 'Tempo esgotado!');
   const sb = scoreboard(r);
   broadcast(r, { t: 'score', list: sb.list, teams: sb.teams, left: r.endsAt ? Math.max(0, Math.round((r.endsAt - now) / 1000)) : -1 });
@@ -204,8 +224,9 @@ function onMessage(p, raw) {
       break;
     case 'p': tell(p, { t: 'po', c: m.c }); break;
     case 'rooms': {
-      const list = [...rooms.values()].filter(x => x.state === 'lobby' && x.players.size < MAX_PLAYERS)
-        .map(x => ({ code: x.code, host: (x.players.get(x.hostId) || {}).name || '?', n: x.players.size, settings: x.settings }));
+      const list = [...rooms.values()].filter(x => x.state === 'lobby' && !x.settings.locked && x.players.size < (x.settings.maxPlayers || MAX_PLAYERS))
+        .map(x => ({ code: x.code, host: (x.players.get(x.hostId) || {}).name || '?', n: x.players.size,
+          settings: Object.assign({}, x.settings, { pass: undefined, hasPass: !!x.settings.pass }) }));
       tell(p, { t: 'rooms', list });
       break;
     }
@@ -213,44 +234,105 @@ function onMessage(p, raw) {
     case 'join': {
       const rr = rooms.get(clean(m.code, 4).toUpperCase());
       if (!rr) return tell(p, { t: 'error', msg: 'Sala não encontrada.' });
-      joinRoom(p, rr);
+      joinRoom(p, rr, m.pass);
       break;
     }
     case 'leave': leaveRoom(p); tell(p, { t: 'left', id: p.id, self: true }); break;
     case 'settings':
       if (r && r.state === 'lobby' && r.hostId === p.id) {
-        r.settings = cleanSettings(m.settings, r.settings); assignTeams(r);
-        for (const q of r.players.values()) { q.ready = !!q.isBot; if (q.design && !q.isBot) revalidate(q, r); }
+        r.settings = cleanSettings(m.settings, r.settings, r.players.size); assignTeams(r);
+        for (const q of [...r.players.values()]) {
+          q.ready = !!q.isBot;
+          if (q.isBot) { if (!G.validateDesign(q.design, 0, r.settings).ok) dropBot(r, q); }             // bots que violam as regras saem
+          else if (q.design) revalidate(q, r);
+        }
         broadcastRoom(r);
       }
       break;
     case 'addBot':
       if (r && r.state === 'lobby' && r.hostId === p.id) {
-        if (r.players.size >= MAX_PLAYERS) return tell(p, { t: 'error', msg: 'Sala cheia.' });
-        let design = null, name = '';
-        const pre = G.PRESETS.find(x => x.id === m.preset);
-        if (pre) { design = pre.design; name = pre.name; } else if (m.preset === 'meu' && m.design) { design = m.design; name = 'Clone'; }
-        if (!design) return tell(p, { t: 'error', msg: 'Modelo de bot inválido.' });
-        const v = G.validateDesign(design, 0);
-        if (!v.ok) return tell(p, { t: 'error', msg: 'Bot inválido: ' + v.error });
-        const diff = ['facil', 'normal', 'dificil', 'mestre'].includes(m.diff) ? m.diff : 'normal';
-        let n = 1; for (const q of r.players.values()) if (q.isBot && q.name.replace(/ \d+$/, '') === '🤖 ' + name) n++;
-        const id = 'b' + (nextId++);
-        r.players.set(id, { id, isBot: true, owner: p.id, send: () => {}, name: '🤖 ' + name + (n > 1 ? ' ' + n : ''), room: r, design, stats: v.stats, ready: true,
-          team: '', teamPref: (m.team === 'A' || m.team === 'B') ? m.team : '', diff, kills: 0, deaths: 0, alive: false,
-          x: 0, y: 0, vision: 650, sonar: 0, pingR: 0, sig: 1, sub: false, quiet: 1, dp: 0, revealUntil: 0, revealR: 0, pingUntil: 0, lastSnapAt: 0, rateT: 0, rateN: 0, respawnTimer: null });
+        const err = addBotTo(r, p, m.preset, m.design, m.diff, m.team);
+        if (err) return tell(p, { t: 'error', msg: err });
         assignTeams(r); broadcastRoom(r);
       }
       break;
     case 'removeBot':
-      if (r && r.state === 'lobby' && r.hostId === p.id) {
+      if (r && r.hostId === p.id) {
         const b = r.players.get(clean(m.id, 12));
-        if (b && b.isBot) { r.players.delete(b.id); assignTeams(r); broadcastRoom(r); }
+        if (b && b.isBot) { dropBot(r, b); assignTeams(r); broadcastRoom(r); }
       }
+      break;
+    case 'clearBots':
+      if (r && r.hostId === p.id) {
+        for (const b of [...r.players.values()]) if (b.isBot) dropBot(r, b);
+        assignTeams(r); broadcastRoom(r);
+      }
+      break;
+    case 'fillBots':
+      if (r && r.state === 'lobby' && r.hostId === p.id) {
+        const limit = Math.min(MAX_PLAYERS, r.settings.maxPlayers), want = Math.min(+m.n | 0, limit - r.players.size);
+        const pool = G.PRESETS.filter(x => G.validateDesign(x.design, r.settings.budget || 0, r.settings).ok);
+        let added = 0;
+        for (let i = 0; i < want && pool.length; i++) {
+          const pre = pool[(Math.random() * pool.length) | 0];
+          if (!addBotTo(r, p, pre.id, null, m.diff, '')) added++;
+        }
+        if (!added) tell(p, { t: 'error', msg: 'Nenhum modelo de bot cabe nas regras/orçamento da sala.' });
+        assignTeams(r); broadcastRoom(r);
+      }
+      break;
+    case 'setTeam':
+      if (r && r.state === 'lobby' && r.hostId === p.id && r.settings.mode === 'teams') {
+        const t = r.players.get(clean(m.id, 12));
+        if (t) { t.teamPref = (m.team === 'A' || m.team === 'B') ? m.team : ''; assignTeams(r); broadcastRoom(r); }
+      }
+      break;
+    case 'balance':
+      if (r && r.state === 'lobby' && r.hostId === p.id) {
+        for (const q of r.players.values()) q.teamPref = '';
+        assignTeams(r); broadcastRoom(r);
+      }
+      break;
+    case 'kick': {
+      if (!r || r.hostId !== p.id) break;
+      const t = r.players.get(clean(m.id, 12));
+      if (!t || t.isBot || t.id === p.id) break;
+      if (m.ban) r.bans.add(String(t.name).toLowerCase());
+      tell(t, { t: 'kicked', ban: !!m.ban });
+      setTimeout(() => { leaveRoom(t); try { if (t.close) t.close(); } catch (e) { /* ignore */ } }, 80);
+      break;
+    }
+    case 'pause':
+      if (r && r.state === 'playing' && r.hostId === p.id && !!m.v !== r.paused) {
+        r.paused = !!m.v;
+        if (r.paused) r.pausedAt = now; else if (r.endsAt) r.endsAt += now - r.pausedAt;
+        broadcast(r, { t: 'paused', v: r.paused });
+      }
+      break;
+    case 'endNow':
+      if (r && r.state === 'playing' && r.hostId === p.id) endMatch(r, 'Partida encerrada pelo anfitrião.');
+      break;
+    case 'addTime':
+      if (r && r.state === 'playing' && r.hostId === p.id) {
+        const mins = Math.max(1, Math.min(30, +m.min | 0));
+        r.endsAt = (r.endsAt || (r.paused ? r.pausedAt : now)) + mins * 60000;
+        broadcast(r, { t: 'say', text: '+' + mins + ' min de partida', from: 'Anfitrião' });
+      }
+      break;
+    case 'live':                                                   // ajustes durante a partida
+      if (r && r.state === 'playing' && r.hostId === p.id) {
+        const keep = {};
+        for (const k of ['killLimit', 'respawn', 'ff']) if (m.settings && m.settings[k] !== undefined) keep[k] = m.settings[k];
+        r.settings = cleanSettings(Object.assign({}, r.settings, keep), r.settings, r.players.size);
+        broadcastRoom(r); checkWin(r);
+      }
+      break;
+    case 'say':
+      if (r && r.hostId === p.id) { const text = clean(m.text, 90); if (text) broadcast(r, { t: 'say', text, from: p.name }); }
       break;
     case 'design':
       if (r && r.state === 'lobby') {
-        const v = G.validateDesign(m.design, r.settings.budget);
+        const v = G.validateDesign(m.design, r.settings.budget, r.settings);
         if (!v.ok) { p.design = null; p.stats = null; p.ready = false; tell(p, { t: 'designErr', msg: v.error }); broadcastRoom(r); break; }
         p.design = m.design; p.stats = v.stats; p.ready = false;
         tell(p, { t: 'designOk', cost: v.stats.cost });
@@ -271,10 +353,10 @@ function onMessage(p, raw) {
 
     /* ------- durante a partida ------- */
     case 'snap': {
-      if (!r || r.state !== 'playing' || !p.alive) return;
+      if (!r || r.state !== 'playing' || !p.alive || r.paused) return;
       if (now - p.lastSnapAt < 35) return;
       p.lastSnapAt = now;
-      const x = num(m.x, -HALF, HALF), y = num(m.y, -HALF, HALF);
+      const H = halfOf(r), x = num(m.x, -H, H), y = num(m.y, -H, H);
       if (!Number.isFinite(+m.x) || !Number.isFinite(+m.y)) return;
       p.x = x; p.y = y;
       // o cliente só pode ser MENOS furtivo/atento que o projeto permite
@@ -301,7 +383,7 @@ function onMessage(p, raw) {
       break;
     }
     case 'shot': {
-      if (!r || r.state !== 'playing' || !p.alive || !SHOT_KINDS.has(m.kind)) return;
+      if (!r || r.state !== 'playing' || !p.alive || r.paused || !SHOT_KINDS.has(m.kind)) return;
       const vals = ['x', 'y', 'vx', 'vy', 'life', 'dmg'];
       for (const k of vals) if (!Number.isFinite(+m[k])) return;
       const sh = { t: 'shot', kind: m.kind, id: clean(m.id, 24), owner: p.id, team: p.team,
@@ -333,32 +415,61 @@ function onMessage(p, raw) {
       const sb = scoreboard(r);
       broadcast(r, { t: 'died', id: p.id, by: by ? by.id : null, list: sb.list, teams: sb.teams });
       checkWin(r);
-      if (r.state === 'playing') {
-        p.respawnTimer = setTimeout(() => {
-          if (r.state !== 'playing' || !r.players.has(p.id)) return;
-          p.alive = true; p.lastSnapAt = 0;
-          const sp = spawnPoint(r, p); p.x = sp.x; p.y = sp.y;
-          p.vision = p.stats.vision; p.sonar = p.stats.sonarR; p.pingR = p.stats.pingR; p.sig = p.stats.sig; p.dp = 0; p.sub = false; p.quiet = 1;
-          p.revealUntil = p.pingUntil = 0;
-          broadcast(r, { t: 'spawn', id: p.id, x: sp.x, y: sp.y, a: sp.a });
-        }, RESPAWN_MS);
-      }
+      if (r.state === 'playing') scheduleRespawn(r, p, r.settings.respawn * 1000);
       break;
     }
   }
 }
 
+function scheduleRespawn(r, p, ms) {
+  clearTimeout(p.respawnTimer);
+  p.respawnTimer = setTimeout(() => {
+    if (r.state !== 'playing' || !r.players.has(p.id)) return;
+    if (r.paused) return scheduleRespawn(r, p, 500);                // pausado: espera
+    p.alive = true; p.lastSnapAt = 0;
+    const sp = spawnPoint(r, p); p.x = sp.x; p.y = sp.y;
+    p.vision = p.stats.vision; p.sonar = p.stats.sonarR; p.pingR = p.stats.pingR; p.sig = p.stats.sig; p.dp = 0; p.sub = false; p.quiet = 1;
+    p.revealUntil = p.pingUntil = 0;
+    broadcast(r, { t: 'spawn', id: p.id, x: sp.x, y: sp.y, a: sp.a });
+  }, ms);
+}
+
+/** cria um bot na sala (devolve texto de erro ou null) */
+function addBotTo(r, owner, presetId, design, diff, teamPref) {
+  const limit = Math.min(MAX_PLAYERS, r.settings.maxPlayers || MAX_PLAYERS);
+  if (r.players.size >= limit) return 'Sala cheia.';
+  let name = '';
+  const pre = G.PRESETS.find(x => x.id === presetId);
+  if (pre) { design = pre.design; name = pre.name; } else if (presetId === 'meu' && design) { name = 'Clone'; } else design = null;
+  if (!design) return 'Modelo de bot inválido.';
+  const v = G.validateDesign(design, 0, r.settings);
+  if (!v.ok) return 'Bot não permitido: ' + v.error;
+  diff = ['facil', 'normal', 'dificil', 'mestre'].includes(diff) ? diff : 'normal';
+  let n = 1; for (const q of r.players.values()) if (q.isBot && q.name.replace(/ \d+$/, '') === '🤖 ' + name) n++;
+  const id = 'b' + (nextId++);
+  r.players.set(id, { id, isBot: true, owner: owner.id, send: () => {}, name: '🤖 ' + name + (n > 1 ? ' ' + n : ''), room: r, design, stats: v.stats, ready: true,
+    team: '', teamPref: (teamPref === 'A' || teamPref === 'B') ? teamPref : '', diff, kills: 0, deaths: 0, alive: false,
+    x: 0, y: 0, vision: 650, sonar: 0, pingR: 0, sig: 1, sub: false, quiet: 1, dp: 0, revealUntil: 0, revealR: 0, pingUntil: 0, lastSnapAt: 0, rateT: 0, rateN: 0, respawnTimer: null });
+  return null;
+}
+
+/** remove um bot (também durante a partida: os clientes recebem "left") */
+function dropBot(r, b) {
+  clearTimeout(b.respawnTimer); r.players.delete(b.id);
+  if (r.state === 'playing') broadcast(r, { t: 'left', id: b.id });
+}
+
 /** a sala mudou o orçamento: revalida o navio de quem já enviou */
 function revalidate(q, r) {
-  const v = G.validateDesign(q.design, r.settings.budget);
+  const v = G.validateDesign(q.design, r.settings.budget, r.settings);
   if (!v.ok) { q.design = null; q.stats = null; tell(q, { t: 'designErr', msg: v.error }); } else q.stats = v.stats;
 }
 
 
 /* ------------------------------------------------------------------ conexões */
 /** registra um novo cliente; sendFn(texto) entrega mensagens a ele */
-function connect(sendFn) {
-  const p = { id: 'u' + (nextId++), send: sendFn, name: '', room: null, design: null, stats: null, ready: false, team: '', kills: 0, deaths: 0, alive: false,
+function connect(sendFn, closeFn) {
+  const p = { id: 'u' + (nextId++), send: sendFn, close: closeFn, name: '', room: null, design: null, stats: null, ready: false, team: '', kills: 0, deaths: 0, alive: false,
     x: 0, y: 0, vision: 650, sonar: 0, pingR: 0, sig: 1, sub: false, quiet: 1, dp: 0, revealUntil: 0, revealR: 0, pingUntil: 0, lastSnapAt: 0, rateT: 0, rateN: 0, respawnTimer: null };
   players.add(p);
   tell(p, { t: 'hi', id: p.id, version: G.VERSION });

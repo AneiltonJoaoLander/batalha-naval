@@ -4,7 +4,8 @@
    Mundo em pixels. Ângulo 0 = proa para cima (norte), positivo = horário.
    ===================================================================== */
 const CS = 22;                 // tamanho da célula na batalha
-const WORLD = 3600, HALF = WORLD / 2;
+let WORLD = 3600, HALF = WORLD / 2;                    // tamanho da arena (o anfitrião escolhe no online)
+function setArena(size) { WORLD = size; HALF = size / 2; }
 
 const rand = (a, b) => a + Math.random() * (b - a);
 const dirOf = a => [Math.sin(a), -Math.cos(a)];
@@ -617,7 +618,7 @@ const Battle = {
   ships: [], shots: [], parts: [], player: null, cam: { x: 0, y: 0 }, shake: 0, time: 0,
   keys: new Set(), mouse: { x: 0, y: 0, left: false, right: false },
   wave: 1, state: 'idle', running: false, last: 0, clearTimer: 0, overTimer: 0,
-  runCoins: 0, kills: 0, design: null, hud: {}, mode: 'campaign', teamLast: {}, skirmish: null, localIds: new Set(), zoom: 1, shotSeq: 0, myDesign: null, cfg: null, deadNotice: false, contacts: new Map(), obs: [], aiAware: true, aiLast: { x: 0, y: 0 }, stealthT: 0,
+  runCoins: 0, kills: 0, design: null, hud: {}, mode: 'campaign', noFog: false, friendlyFire: false, hostPaused: false, teamLast: {}, skirmish: null, localIds: new Set(), zoom: 1, shotSeq: 0, myDesign: null, cfg: null, deadNotice: false, contacts: new Map(), obs: [], aiAware: true, aiLast: { x: 0, y: 0 }, stealthT: 0,
 
   init() {
     this.canvas = document.getElementById('game'); this.ctx = this.canvas.getContext('2d');
@@ -675,6 +676,7 @@ const Battle = {
   start(design, wave, skirmish) {
     SFX.init();
     this.mode = 'campaign'; document.getElementById('screen-battle').classList.remove('online');
+    setArena(3600); this.noFog = false; this.friendlyFire = false; this.hostPaused = false;
     this.design = design; this.wave = wave; this.runCoins = 0; this.kills = 0;
     this.clearTimer = 0; this.overTimer = 0;
     this.ships = []; this.shots = []; this.parts = []; this.time = 0; this.shake = 0;
@@ -696,6 +698,7 @@ const Battle = {
   startOnline(cfg) {
     SFX.init();
     this.mode = 'online'; document.getElementById('screen-battle').classList.add('online');
+    setArena(cfg.settings.arena || 3600); this.hostPaused = false; this.applyRules(cfg.settings);
     this.cfg = cfg; this.myDesign = cfg.me.design; this.shotSeq = 0; this.deadNotice = false;
     this.wave = 0; this.runCoins = 0; this.kills = 0;
     this.ships = []; this.shots = []; this.parts = []; this.time = 0; this.shake = 0;
@@ -713,6 +716,10 @@ const Battle = {
     this.state = 'playing';
     if (!this.running) { this.running = true; this.last = performance.now(); requestAnimationFrame(t => this.loop(t)); }
   },
+  /** regras da sala que valem durante a partida */
+  applyRules(st) { this.noFog = st.fog === false; this.friendlyFire = !!st.ff; },
+  /** `s` é da equipe `team` e não deve ser atingido? (fogo amigo liga: só o próprio dono do tiro é poupado) */
+  sameTeam(s, team, owner) { return s.team === team && !(this.friendlyFire && s.id !== owner); },
   addRemote(p, sp) {
     const s = new Ship(p.design, p.team, sp ? sp.x : 0, sp ? sp.y : 0, sp ? sp.a : 0);
     s.id = p.id; s.label = p.name; s.remote = true; s.seenT = 0; s.net = null;
@@ -781,6 +788,7 @@ const Battle = {
       if (!ov.classList.contains('hidden')) { UI.hideOverlay(); return; }
       UI.overlay({ title: 'Partida online', html: '<p>O jogo continua rodando para os outros jogadores.</p>', buttons: [
         { label: 'Continuar', primary: true, onClick: () => UI.hideOverlay() },
+        ...(Online.isHost() ? [{ label: '👑 Painel do anfitrião', onClick: () => Online.openHostPanel() }] : []),
         { label: 'Sair da partida', onClick: () => Online.leaveToMenu() },
       ] });
       return;
@@ -909,11 +917,12 @@ const Battle = {
       if (s.dead || !this.visibleToMe(s)) continue;
       let inside = false;
       for (const o of this.obs) if (Math.hypot(s.x - o.x, s.y - o.y) <= o.vision) { inside = true; break; }
-      contacts.set(s, inside ? 'full' : 'blip');
+      contacts.set(s, inside || this.noFog ? 'full' : 'blip');
     }
     this.contacts = contacts;
   },
   inVision(x, y) {
+    if (this.noFog) return true;
     for (const o of this.obs) { const dx = x - o.x, dy = y - o.y; if (dx * dx + dy * dy <= o.vision * o.vision) return true; }
     return false;
   },
@@ -1084,6 +1093,7 @@ const Battle = {
   },
 
   update(dt) {
+    if (this.hostPaused) return;                       // o anfitrião pausou a partida
     this.time += dt;
     this.playerInput();
     for (const s of this.ships) if (s.ai && !s.sinking && !s.dead) this.aiThink(s, dt);
@@ -1132,7 +1142,7 @@ const Battle = {
         if (p.life <= 0) { p.dead = true; continue; }
         if (p.age > p.arm) {
           for (const s of this.ships) {
-            if (s.team === p.team || s.sinking || (s.remote && s.seenT <= 0)) continue;
+            if (this.sameTeam(s, p.team, p.owner) || s.sinking || (s.remote && s.seenT <= 0)) continue;
             if (Math.hypot(s.x - p.x, s.y - p.y) > s.radius + 30) continue;
             let touch = false;
             for (const c of s.list) { if (c.dead) continue; const [wx, wy] = s.cellWorld(c); if (Math.hypot(wx - p.x, wy - p.y) < 24) { touch = true; break; } }
@@ -1149,7 +1159,7 @@ const Battle = {
       for (let i = 0; i < steps && !p.dead; i++) {
         p.x += p.vx * dt / steps; p.y += p.vy * dt / steps;
         for (const s of this.ships) {
-          if (s.team === p.team || s.sinking || (s.remote && s.seenT <= 0)) continue;
+          if (this.sameTeam(s, p.team, p.owner) || s.sinking || (s.remote && s.seenT <= 0)) continue;
           if (s.depth > DEEP && p.kind !== 'torp') continue;          // submerso: só torpedos o alcançam
           const c = s.cellAt(p.x, p.y);
           if (c && this.impactShot(p, s, c)) {
@@ -1239,7 +1249,7 @@ const Battle = {
     if (kind === 'depth') { this.splash(x, y, 2.2); this.explosion(x, y, 0.7); } else this.explosion(x, y, Math.max(0.6, radius / 25));
     const reach = radius + CS * 0.5;
     for (const s of this.ships) {
-      if (s.team === team || s.sinking) continue;
+      if (this.sameTeam(s, team, owner) || s.sinking) continue;
       const deep = s.depth > DEEP;
       if (deep && !under) continue;
       const dm = kind === 'depth' && !deep ? (dmgSurf == null ? dmg * 0.3 : dmgSurf) : dmg;
@@ -1551,6 +1561,7 @@ const Battle = {
 
   /** escuridão fora do alcance de visão (buracos suaves ao redor de cada observador) */
   drawFog() {
+    if (this.noFog) return;
     const f = this.fogCtx, W = this.W, H = this.H;
     f.setTransform(1, 0, 0, 1, 0, 0); f.globalCompositeOperation = 'source-over';
     f.clearRect(0, 0, W, H); f.fillStyle = 'rgba(3,10,24,0.80)'; f.fillRect(0, 0, W, H);

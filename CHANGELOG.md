@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.7.0 — controles do anfitrião
+**No lobby (regras da sala)**
+- **Jogadores máx.** (2–8), **tempo de reaparecimento** (1–15 s), **tamanho da arena** (pequena/média/grande), **névoa de guerra** liga/desliga e **fogo amigo** (equipes).
+- **Peças proibidas:** submarinos, peças furtivas e armas guiadas. Navios e bots que violam as regras são recusados/removidos.
+- **Trancar a sala** e **senha** (quem entra precisa digitar a senha).
+- **Expulsar** e **banir** (por nome) jogadores; **mover jogadores/bots de equipe** (clique na etiqueta da equipe) e **balancear equipes**.
+- **Preencher com bots** (modelos que cabem nas regras e no orçamento) e **remover todos os bots**.
+
+**Durante a partida (botão 👑, ou Esc → Painel do anfitrião)**
+- **Pausar/continuar** para todos (o tempo da partida não corre durante a pausa).
+- **+5 min**, **encerrar a partida** e **anunciar** uma mensagem a todos.
+- Ajustar **abates para vencer**, **tempo de reaparecimento** e **fogo amigo** ao vivo.
+- **Expulsar/banir** jogadores e **remover bots** sem parar o jogo.
+
+**Correção:** o servidor agora limita e valida todos esses comandos (só o anfitrião pode usá-los).
+
 ## v1.6.0
 **Submarinos**
 - 🚢 **Torre Submarina**: troque a ponte por ela e o navio vira submarino. **V** (ou o botão ⬇) mergulha/emerge.
@@ -21,7 +37,6 @@
 **Zoom**
 - **⚙ Opções**: zoom de 35% a 160% (menor = vê mais da tela). Na batalha: roda do mouse ou teclas **−/+**. Salvo no aparelho; no celular o padrão é 75%.
 
-## v1.5.1
 ## v1.5.1
 - 🌐 **Online sem servidor:** agora funciona só com o GitHub Pages. O navegador do anfitrião roda a lógica do servidor e os jogadores se conectam por **P2P (WebRTC/PeerJS)** usando um **código de sala** ou **link de convite** (`?sala=CODIGO`).
 - A lógica do servidor foi extraída para `gameserver.js` (roda no navegador ou no Node); o servidor dedicado (`server/server.js`) continua disponível como opção avançada.

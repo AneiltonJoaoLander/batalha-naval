@@ -22,7 +22,7 @@ const UI = {
     }
     $('overlay').classList.remove('hidden');
   },
-  hideOverlay() { $('overlay').classList.add('hidden'); },
+  hideOverlay() { $('overlay').classList.add('hidden'); const cd = document.querySelector('#overlay .card'); if (cd) cd.classList.remove('host'); },
   banner(title, sub) {
     const b = $('banner');
     b.querySelector('h2').textContent = title; b.querySelector('p').textContent = sub || '';

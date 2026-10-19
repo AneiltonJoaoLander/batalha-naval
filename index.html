@@ -101,11 +101,13 @@
             <select id="cr-kills"><option>5</option><option>10</option><option selected>15</option><option>20</option><option>30</option><option>50</option></select></label>
           <label class="field">Tempo
             <select id="cr-min"><option value="5">5 min</option><option value="10" selected>10 min</option><option value="15">15 min</option><option value="20">20 min</option><option value="0">Sem limite</option></select></label>
+          <label class="field">Senha da sala (opcional)<input id="cr-pass" maxlength="8" autocomplete="off" placeholder="sem senha"></label>
           <button class="btn primary big" id="on-create">Criar sala</button>
         </div>
         <div>
           <h3 class="sub">Entrar em uma sala</h3>
           <div class="join-line"><input id="on-code" maxlength="4" placeholder="CÓDIGO" autocomplete="off" autocapitalize="characters"><button class="btn" id="on-join">Entrar</button></div>
+          <input id="on-pass" class="pass-in" maxlength="8" autocomplete="off" placeholder="senha (se a sala tiver)">
           <p class="muted">Peça ao anfitrião o <b>código</b> ou o <b>link</b> da sala.</p>
           <div id="on-rooms-wrap" class="hidden">
             <h3 class="sub">Salas abertas <button class="btn small" id="on-refresh">↻</button></h3>
@@ -134,6 +136,12 @@
             <h3 class="sub">🤖 Adicionar bot <small>(roda no seu navegador)</small></h3>
             <div class="bot-line"><select id="ba-model"></select><select id="ba-diff"></select><select id="ba-team" class="hidden"><option value="">Equipe auto</option><option value="A">Equipe A</option><option value="B">Equipe B</option></select><button class="btn" id="ba-add">+ Adicionar</button></div>
           </div>
+          <div id="host-tools" class="row-tools hidden">
+            <button class="btn small" id="ht-fill" title="Completa a sala com bots aleatórios que cabem nas regras">🤖 Preencher com bots</button>
+            <button class="btn small" id="ht-clear">🧹 Remover bots</button>
+            <button class="btn small hidden" id="ht-balance" title="Volta a dividir os jogadores igualmente">⚖ Balancear equipes</button>
+          </div>
+          <p id="lobby-flags" class="muted"></p>
           <p id="lobby-ship" class="ship-line"></p>
           <div class="row-tools">
             <button class="btn small" id="on-send-ship" title="Reenviar o navio atual">↻ Reenviar navio</button>
@@ -144,6 +152,17 @@
           <label class="field">Orçamento <select id="lb-budget"><option value="200">🪙 200</option><option value="300">🪙 300</option><option value="450">🪙 450</option><option value="700">🪙 700</option><option value="1000">🪙 1000</option><option value="1500">🪙 1500</option><option value="0">Sem limite</option></select></label>
           <label class="field">Abates <select id="lb-kills"><option>5</option><option>10</option><option>15</option><option>20</option><option>30</option><option>50</option></select></label>
           <label class="field">Tempo <select id="lb-min"><option value="5">5 min</option><option value="10">10 min</option><option value="15">15 min</option><option value="20">20 min</option><option value="0">Sem limite</option></select></label>
+          <h3 class="sub">Regras da sala</h3>
+          <label class="field">Jogadores (máx.) <select id="lb-max"><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option></select></label>
+          <label class="field">Reaparecer em <select id="lb-resp"><option value="1">1 s</option><option value="3">3 s</option><option value="5">5 s</option><option value="8">8 s</option><option value="12">12 s</option><option value="15">15 s</option></select></label>
+          <label class="field">Arena <select id="lb-arena"><option value="2400">Pequena</option><option value="3600">Média</option><option value="5000">Grande</option></select></label>
+          <label class="check"><input type="checkbox" id="lb-fog"> Névoa de guerra (visão limitada)</label>
+          <label class="check"><input type="checkbox" id="lb-ff"> Fogo amigo (equipes)</label>
+          <label class="check"><input type="checkbox" id="lb-sub"> Permitir submarinos</label>
+          <label class="check"><input type="checkbox" id="lb-stealth"> Permitir peças furtivas</label>
+          <label class="check"><input type="checkbox" id="lb-guided"> Permitir armas guiadas</label>
+          <label class="check"><input type="checkbox" id="lb-lock"> Trancar a sala (ninguém novo entra)</label>
+          <label class="field">Senha <input id="lb-pass" maxlength="8" autocomplete="off" placeholder="sem senha"></label>
         </div>
       </div>
       <div class="btns row">
@@ -169,6 +188,7 @@
   <div id="online-hud" class="hidden">
     <div id="scoreboard"></div>
     <div id="feed"></div>
+    <button id="host-btn" class="host-btn hidden" title="Controles do anfitrião">👑</button>
     <div id="on-notice" class="notice hidden"></div>
     <div id="net-ping" title="Latência"></div>
   </div>

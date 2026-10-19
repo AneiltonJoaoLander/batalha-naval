@@ -9,7 +9,7 @@
    A proa (frente) do navio aponta para CIMA da grade.
    ===================================================================== */
 
-const VERSION = '1.6.0';
+const VERSION = '1.7.0';
 const GRID_W = 13;
 const GRID_H = 17;
 const BASE_BUDGET = 220;
@@ -328,7 +328,7 @@ function makeDesign(hullRows, topRows) {
 }
 
 /** valida um projeto (usado pelo servidor). budget <= 0 ignora o custo. */
-function validateDesign(d, budget) {
+function validateDesign(d, budget, rules) {
   try {
     if (!d || !Array.isArray(d.hull) || !Array.isArray(d.top) || d.hull.length !== GRID_H || d.top.length !== GRID_H) return { ok: false, error: 'Grade inválida.' };
     let bridges = 0, hulls = 0;
@@ -360,6 +360,18 @@ function validateDesign(d, budget) {
       }
     }
     if (seen.size !== hulls) return { ok: false, error: 'Casco desconectado.' };
+    if (rules) {                                           // regras da sala (anfitrião): peças proibidas
+      let sub = false, stealth = false, guided = false;
+      for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) {
+        const h = d.hull[y][x], t = d.top[y][x];
+        if (h === 'U') sub = true;
+        if (h === 's' || t === 'Q') stealth = true;
+        if (t === 'u' || t === 'a') guided = true;
+      }
+      if (rules.allowSub === false && sub) return { ok: false, error: 'Submarinos não são permitidos nesta sala.' };
+      if (rules.allowStealth === false && stealth) return { ok: false, error: 'Peças furtivas não são permitidas nesta sala.' };
+      if (rules.allowGuided === false && guided) return { ok: false, error: 'Armas guiadas (míssil/torpedo guiado) não são permitidas nesta sala.' };
+    }
     const stats = shipStats(designCells(d));
     if (budget > 0 && stats.cost > budget) return { ok: false, error: 'Navio acima do orçamento da sala (' + stats.cost + '/' + budget + ').', stats };
     return { ok: true, stats };

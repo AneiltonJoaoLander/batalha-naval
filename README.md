@@ -1,4 +1,4 @@
-# ⚓ Batalha Naval — v1.6
+# ⚓ Batalha Naval — v1.7
 
 Monte seu navio **peça por peça** numa grade (casco, armas, motores, aletas, sensores…) e lute contra ondas de inimigos
 ou contra outros jogadores **online**. Funciona no computador e no **celular** (instalável como app).
@@ -36,6 +36,11 @@ O online funciona **só com o GitHub Pages**: a partida roda direto entre os nav
 2. Os outros abrem o jogo, vão em **Jogar online**, digitam o código — ou abrem o **link de convite** (`…/?sala=CODIGO`, botão *Copiar link* no lobby).
 3. Cada um monta o navio no Estaleiro (o orçamento da sala é validado pelo anfitrião), clica **Estou pronto** e o anfitrião **inicia**.
 4. O anfitrião pode **adicionar bots** no lobby (modelo, dificuldade e equipe); eles rodam no navegador dele e contam no placar.
+
+### Controles do anfitrião (v1.7)
+- **Regras da sala:** jogadores máximos, tempo de reaparecimento, arena (pequena/média/grande), névoa de guerra, fogo amigo, proibir submarinos/furtividade/armas guiadas, **trancar** e **senha**.
+- **Jogadores:** expulsar, banir, mover de equipe, balancear equipes; **preencher com bots** ou removê-los.
+- **Durante a partida** (botão 👑 ou `Esc` → *Painel do anfitrião*): **pausar/continuar**, **+5 min**, **encerrar**, **anunciar**, ajustar abates/reaparecimento/fogo amigo ao vivo, expulsar/banir e remover bots.
 
 Dicas e limites:
 - O anfitrião precisa **manter a página aberta e em primeiro plano** (no celular, não bloquear a tela). O melhor aparelho/conexão deve ser o anfitrião.

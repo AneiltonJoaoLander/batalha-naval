@@ -60,7 +60,13 @@ const Online = {
       if (sel.value === 'meu') m.design = Builder.getDesign();
       this.send(m);
     };
-    for (const id of ['lb-mode', 'lb-budget', 'lb-kills', 'lb-min']) $(id).onchange = () => this.send({ t: 'settings', settings: this.formSettings('lb') });
+    for (const id of ['lb-mode', 'lb-budget', 'lb-kills', 'lb-min', 'lb-max', 'lb-resp', 'lb-arena', 'lb-fog', 'lb-ff', 'lb-sub', 'lb-stealth', 'lb-guided', 'lb-lock'])
+      $(id).onchange = () => this.send({ t: 'settings', settings: this.formSettings('lb') });
+    $('lb-pass').onchange = () => this.send({ t: 'settings', settings: Object.assign(this.formSettings('lb'), { pass: $('lb-pass').value.trim(), setPass: true }) });
+    $('ht-fill').onclick = () => this.send({ t: 'fillBots', n: 8, diff: $('ba-diff').value });
+    $('ht-clear').onclick = () => this.send({ t: 'clearBots' });
+    $('ht-balance').onclick = () => this.send({ t: 'balance' });
+    $('host-btn').onclick = () => this.openHostPanel();
     this.render();
     // convite por link: ?sala=CODIGO entra direto
     const q = new URLSearchParams(location.search).get('sala');
@@ -68,7 +74,13 @@ const Online = {
   },
   formSettings(p) {
     const $ = id => document.getElementById(p + '-' + id);
-    return { mode: $('mode').value, budget: +$('budget').value, killLimit: +$('kills').value, minutes: +$('min').value };
+    const o = { mode: $('mode').value, budget: +$('budget').value, killLimit: +$('kills').value, minutes: +$('min').value };
+    const num = (id, key) => { const e = $(id); if (e) o[key] = +e.value; };
+    const chk = (id, key) => { const e = $(id); if (e) o[key] = e.checked; };
+    num('max', 'maxPlayers'); num('resp', 'respawn'); num('arena', 'arena');
+    chk('fog', 'fog'); chk('ff', 'ff'); chk('sub', 'allowSub'); chk('stealth', 'allowStealth'); chk('guided', 'allowGuided'); chk('lock', 'locked');
+    const pw = $('pass'); if (pw && p === 'cr') o.pass = pw.value.trim();             // no lobby a senha tem campo/evento próprio
+    return o;
   },
   makeCode() { let c = ''; for (let i = 0; i < 4; i++) c += CODE_ALPHABET[(Math.random() * CODE_ALPHABET.length) | 0]; return c; },
   myName() { const n = document.getElementById('on-name').value.trim().slice(0, 16); return n || 'Capitão'; },
@@ -102,16 +114,37 @@ const Online = {
   renderLobby() {
     const $ = id => document.getElementById(id), r = this.room, host = this.isHost(), me = this.me();
     $('lobby-code').textContent = r.code;
-    $('lb-mode').value = r.settings.mode; $('lb-budget').value = r.settings.budget; $('lb-kills').value = r.settings.killLimit; $('lb-min').value = r.settings.minutes;
-    for (const id of ['lb-mode', 'lb-budget', 'lb-kills', 'lb-min']) $(id).disabled = !host;
-    $('lobby-players').innerHTML = r.players.map(p => `<div class="pl-row ${p.id === this.id ? 'me' : ''}">
-        <span class="pl-name">${p.id === r.host ? '👑 ' : ''}${esc(p.name)}</span>
-        ${r.settings.mode === 'teams' ? `<span class="team t${p.team}">Equipe ${p.team}</span>` : ''}
+    const S = r.settings, teams = S.mode === 'teams';
+    $('lb-mode').value = S.mode; $('lb-budget').value = S.budget; $('lb-kills').value = S.killLimit; $('lb-min').value = S.minutes;
+    $('lb-max').value = S.maxPlayers; $('lb-resp').value = S.respawn; $('lb-arena').value = S.arena;
+    $('lb-fog').checked = S.fog !== false; $('lb-ff').checked = !!S.ff; $('lb-sub').checked = S.allowSub !== false;
+    $('lb-stealth').checked = S.allowStealth !== false; $('lb-guided').checked = S.allowGuided !== false; $('lb-lock').checked = !!S.locked;
+    if (document.activeElement !== $('lb-pass')) $('lb-pass').value = '';
+    $('lb-pass').placeholder = S.hasPass ? '(senha definida — digite para trocar)' : 'sem senha';
+    for (const id of ['lb-mode', 'lb-budget', 'lb-kills', 'lb-min', 'lb-max', 'lb-resp', 'lb-arena', 'lb-fog', 'lb-ff', 'lb-sub', 'lb-stealth', 'lb-guided', 'lb-lock', 'lb-pass']) $(id).disabled = !host;
+    $('lb-ff').disabled = !host || !teams;
+    $('lobby-flags').textContent = [S.locked ? '🔒 sala trancada' : '', S.hasPass ? '🔑 com senha' : '', S.fog === false ? '👁 sem névoa' : '', S.ff ? '💥 fogo amigo' : '',
+      S.allowSub === false ? '🚫 submarinos' : '', S.allowStealth === false ? '🚫 furtivo' : '', S.allowGuided === false ? '🚫 guiadas' : ''].filter(Boolean).join(' · ');
+    $('lobby-players').innerHTML = r.players.map(p => {
+      const isHostRow = p.id === r.host;
+      const teamBadge = teams ? (host ? `<button class="team t${p.team} tbtn-team" data-team="${p.id}" data-cur="${p.team}" title="Trocar de equipe">Equipe ${p.team} ⇄</button>` : `<span class="team t${p.team}">Equipe ${p.team}</span>`) : '';
+      const status = p.bot ? ((BOT_DIFFS[p.diff] || {}).name || 'bot') : isHostRow ? 'anfitrião' : p.ready ? 'pronto' : 'aguardando';
+      const actions = host ? (p.bot ? ` <button class="x-btn" data-rm="${p.id}" title="Remover bot">✕</button>`
+        : !isHostRow ? ` <button class="x-btn" data-kick="${p.id}" title="Expulsar">⏏</button><button class="x-btn" data-ban="${p.id}" title="Banir">🚫</button>` : '') : '';
+      return `<div class="pl-row ${p.id === this.id ? 'me' : ''}">
+        <span class="pl-name">${isHostRow ? '👑 ' : ''}${esc(p.name)}</span>${teamBadge}
         <span class="pl-cost">${p.hasDesign ? '🪙 ' + p.cost : 'sem navio'}</span>
-        <span class="pl-ready ${p.ready || p.id === r.host ? 'on' : ''}">${p.bot ? ((BOT_DIFFS[p.diff] || {}).name || 'bot') : p.id === r.host ? 'anfitrião' : p.ready ? 'pronto' : 'aguardando'}${p.bot && host ? ` <button class="x-btn" data-rm="${p.id}" title="Remover bot">✕</button>` : ''}</span></div>`).join('');
-    $('lobby-players').querySelectorAll('[data-rm]').forEach(b => b.onclick = () => this.send({ t: 'removeBot', id: b.dataset.rm }));
+        <span class="pl-ready ${p.ready || isHostRow || p.bot ? 'on' : ''}">${status}${actions}</span></div>`;
+    }).join('');
+    const L = $('lobby-players');
+    L.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => this.send({ t: 'removeBot', id: b.dataset.rm }));
+    L.querySelectorAll('[data-team]').forEach(b => b.onclick = () => this.send({ t: 'setTeam', id: b.dataset.team, team: b.dataset.cur === 'A' ? 'B' : 'A' }));
+    L.querySelectorAll('[data-kick]').forEach(b => b.onclick = () => { if (confirm('Expulsar este jogador da sala?')) this.send({ t: 'kick', id: b.dataset.kick }); });
+    L.querySelectorAll('[data-ban]').forEach(b => b.onclick = () => { if (confirm('Banir este jogador? Ele não poderá entrar de novo com o mesmo nome.')) this.send({ t: 'kick', id: b.dataset.ban, ban: true }); });
+    $('host-tools').classList.toggle('hidden', !host);
+    $('ht-balance').classList.toggle('hidden', !teams);
     $('bot-add').classList.toggle('hidden', !host);
-    $('ba-team').classList.toggle('hidden', r.settings.mode !== 'teams');
+    $('ba-team').classList.toggle('hidden', !teams);
     const budget = r.settings.budget ? r.settings.budget : '∞';
     const mine = Builder.analyze();
     $('lobby-ship').innerHTML = `Seu navio: <b>🪙 ${mine.stats.cost}</b> / ${budget}` +
@@ -161,7 +194,10 @@ const Online = {
   joinRoom(code) {
     code = String(code || '').trim().toUpperCase();
     if (!/^[A-Z0-9]{4}$/.test(code)) return this.err('Digite o código de 4 letras/números da sala.');
-    if (this.kind === 'ws' && this.ok) return this.send({ t: 'join', code });
+    const pass = (document.getElementById('on-pass').value || '').trim();
+    this.joinPass = pass;
+    if (this.kind === 'ws' && this.ok) return this.send({ t: 'join', code, pass });
+    if (this.kind === 'peer' && this.ok && !this.room && this.joinCode === code) return this.send({ t: 'join', code, pass });   // já conectado ao anfitrião: só reenvia (senha corrigida)
     this.startJoin(code);
   },
   leaveRoom() {
@@ -199,7 +235,7 @@ const Online = {
   },
   acceptGuest(conn) {
     let p = null;
-    conn.on('open', () => { p = this.gs.connect(s => { try { conn.send(s); } catch (e) { /* convidado saiu */ } }); });
+    conn.on('open', () => { p = this.gs.connect(s => { try { conn.send(s); } catch (e) { /* convidado saiu */ } }, () => { try { conn.close(); } catch (e) { /* ignore */ } }); });
     conn.on('data', d => { if (p && typeof d === 'string') this.gs.message(p, d); });
     conn.on('close', () => { if (p) { this.gs.disconnect(p); p = null; } });
     conn.on('error', () => {});
@@ -211,14 +247,14 @@ const Online = {
     try { await this.loadPeer(); } catch (e) { return this.fail('Não foi possível carregar a biblioteca de conexão.'); }
     const timeout = setTimeout(() => { if (!this.ok) this.fail('Não foi possível chegar ao anfitrião (ele está com a página aberta? redes móveis rígidas podem bloquear P2P).'); }, 25000);
     const peer = new Peer(undefined, PEER_OPTS);
-    this.peer = peer; this.kind = 'peer';
+    this.peer = peer; this.kind = 'peer'; this.joinCode = code;
     peer.on('open', () => {
       const conn = peer.connect(PEER_PREFIX + code, { reliable: true, serialization: 'json' });
       this.conn = conn;
       conn.on('open', () => {
         this.tx = { send: s => { try { conn.send(s); } catch (e) { /* fechou */ } } };
         this.send({ t: 'hello', name: this.name });
-        this.send({ t: 'join', code });
+        this.send({ t: 'join', code, pass: this.joinPass || '' });
       });
       conn.on('data', d => { try { this.onMessage(JSON.parse(d)); } catch (e) { console.error(e); } });
       conn.on('close', () => { clearTimeout(timeout); this.onClosed(); });
@@ -236,7 +272,8 @@ const Online = {
     this.cleanup();
     if (this.inMatch) { this.inMatch = false; Battle.stop(); Touch.show(false); UI.hideOverlay(); document.getElementById('online-hud').classList.add('hidden'); UI.show('online'); }
     this.render();
-    if (wasOk) this.err('A conexão com a sala foi encerrada (o anfitrião saiu ou a rede caiu).');
+    if (this.kickedMsg) { this.err(this.kickedMsg); this.kickedMsg = ''; }
+    else if (wasOk) this.err('A conexão com a sala foi encerrada (o anfitrião saiu ou a rede caiu).');
   },
 
   copyLink() {
@@ -283,9 +320,16 @@ const Online = {
         break;
       case 'po': this.pingMs = Date.now() - m.c; document.getElementById('on-status').textContent = '● conectado · ' + this.pingMs + ' ms'; document.getElementById('net-ping').textContent = this.pingMs + ' ms'; break;
       case 'rooms': this.renderRooms(m.list); break;
-      case 'error': this.err(m.msg); this.connecting = false; if (this.inMatch) UI.banner('ERRO', m.msg); else this.render(); break;
+      case 'error': this.err(m.msg); this.connecting = false; if (m.needPass) document.getElementById('on-pass').focus(); if (this.inMatch) UI.banner('ERRO', m.msg); else this.render(); break;
       case 'joined': this.err(''); this.connecting = false; this.designOk = false; this.designMsg = ''; this.sendDesign(); break;
-      case 'room': this.room = m.room; this.connecting = false; this.render(); break;
+      case 'room':
+        this.room = m.room; this.connecting = false;
+        if (this.inMatch && this.cfg) { this.cfg.settings = m.room.settings; Battle.applyRules(m.room.settings); this.renderScore(); document.getElementById('host-btn').classList.toggle('hidden', !this.isHost()); }
+        this.render();
+        break;
+      case 'paused': Battle.hostPaused = !!m.v; this.paused = !!m.v; if (this.inMatch) this.notice(m.v ? '⏸ Partida pausada pelo anfitrião' : ''); break;
+      case 'say': UI.banner('📢 ' + (m.from || 'Anfitrião'), m.text); if (this.inMatch) this.addFeed('📢 ' + m.text, 'mine'); break;
+      case 'kicked': this.kickedMsg = m.ban ? 'Você foi banido da sala pelo anfitrião.' : 'Você foi expulso da sala pelo anfitrião.'; break;
       case 'left':
         if (m.self) { this.room = null; if (this.kind === 'ws') this.send({ t: 'rooms' }); this.render(); }
         else if (this.inMatch) { const s = Battle.shipById(m.id); if (s && s !== Battle.player) { s.dead = true; Battle.ships = Battle.ships.filter(q => q !== s); } }
@@ -316,7 +360,8 @@ const Online = {
     this.scores = []; this.teams = {}; this.left = m.endsAt ? Math.round((m.endsAt - Date.now()) / 1000) : -1; this.feed = []; this.snapT = 0; this.snapN = 0;
     UI.hideOverlay(); UI.show('battle'); Touch.show(true);
     document.getElementById('online-hud').classList.remove('hidden');
-    this.notice(''); document.getElementById('feed').innerHTML = '';
+    this.notice(''); document.getElementById('feed').innerHTML = ''; this.paused = false;
+    document.getElementById('host-btn').classList.toggle('hidden', !this.isHost());
     Battle.startOnline(this.cfg);
     UI.banner(m.settings.mode === 'teams' ? 'EQUIPES' : 'TODOS CONTRA TODOS', 'Primeiro a ' + m.settings.killLimit + ' abates' + (m.settings.minutes ? ' · ' + m.settings.minutes + ' min' : ''));
     this.renderScore();
@@ -356,7 +401,7 @@ const Online = {
       tx: s.tx || 0, ty: s.ty || 0, T: s.T || 0, x0: s.x0 || 0, y0: s.y0 || 0, fuse: s.fuse || 0, dmgSurf: s.dmgSurf || 0, arm: s.arm || 0, tg: s.target ? s.target.id : '' });
   },
   sendDied(by, as) { this.send({ t: 'died', by: by || '', as: as || undefined }); },
-  localDead() { this.noticeT = 5; this.notice('Afundado! Reaparecendo em 5 s…'); },
+  localDead() { const s = (this.cfg && this.cfg.settings.respawn) || 5; this.noticeT = s; this.notice('Afundado! Reaparecendo em ' + s + ' s…'); },
   notice(t) { const e = document.getElementById('on-notice'); e.textContent = t; e.classList.toggle('hidden', !t); },
 
   nameOf(id) { const p = this.cfg && this.cfg.players.find(q => q.id === id); return p ? p.name : '?'; },
@@ -366,11 +411,51 @@ const Online = {
     const victim = Battle.shipById(m.id);
     if (victim && victim.remote && !victim.sinking) victim.sink();
     const txt = m.by ? `${this.nameOf(m.by)} afundou ${this.nameOf(m.id)}` : `${this.nameOf(m.id)} afundou`;
+    this.addFeed('☠ ' + txt, m.by === this.id ? 'mine' : m.id === this.id ? 'lost' : '');
+  },
+  addFeed(text, cls) {
     const el = document.createElement('div');
-    el.className = 'feed-row' + (m.by === this.id ? ' mine' : m.id === this.id ? ' lost' : '');
-    el.textContent = '☠ ' + txt; document.getElementById('feed').appendChild(el);
+    el.className = 'feed-row' + (cls ? ' ' + cls : ''); el.textContent = text;
+    const f = document.getElementById('feed'); f.appendChild(el);
     setTimeout(() => el.remove(), 7000);
-    while (document.getElementById('feed').children.length > 5) document.getElementById('feed').firstChild.remove();
+    while (f.children.length > 5) f.firstChild.remove();
+  },
+
+  /** painel de controles do anfitrião durante a partida */
+  openHostPanel() {
+    if (!this.isHost() || !this.cfg || !this.inMatch) return;
+    const S = this.cfg.settings, humans = (this.room ? this.room.players : this.cfg.players), me = this.id;
+    const opts = (list, cur, fmt) => list.map(v => `<option value="${v}" ${+v === +cur ? 'selected' : ''}>${fmt ? fmt(v) : v}</option>`).join('');
+    UI.overlay({
+      title: '👑 Painel do anfitrião',
+      html: `<div class="hp-row">
+          <button class="btn" id="hp-pause">${this.paused ? '▶ Continuar' : '⏸ Pausar'}</button>
+          <button class="btn" id="hp-time">＋5 min</button>
+          <button class="btn danger" id="hp-end">⏹ Encerrar partida</button></div>
+        <h3>Ajustes ao vivo</h3>
+        <div class="hp-row">
+          <label>Abates p/ vencer <select id="hp-kills">${opts([5, 10, 15, 20, 30, 50], S.killLimit)}</select></label>
+          <label>Reaparecer em <select id="hp-resp">${opts([1, 3, 5, 8, 12, 15], S.respawn, v => v + ' s')}</select></label>
+          ${S.mode === 'teams' ? `<label class="check"><input type="checkbox" id="hp-ff" ${S.ff ? 'checked' : ''}> Fogo amigo</label>` : ''}</div>
+        <h3>Anunciar a todos</h3>
+        <div class="hp-row"><input type="text" id="hp-say" maxlength="90" placeholder="mensagem"><button class="btn" id="hp-send">Enviar</button></div>
+        <h3>Jogadores</h3>
+        ${humans.map(p => `<div class="hp-pl"><span>${esc(p.name)}${p.id === me ? ' (você)' : ''}</span>${
+          p.bot ? `<button class="x-btn" data-hp-rm="${p.id}">remover</button>`
+            : p.id !== me ? `<button class="x-btn" data-hp-kick="${p.id}">expulsar</button><button class="x-btn" data-hp-ban="${p.id}">banir</button>` : ''}</div>`).join('')}`,
+      buttons: [{ label: 'Fechar', primary: true, onClick: () => UI.hideOverlay() }],
+    });
+    const box = document.querySelector('#overlay .card'); box.classList.add('host');
+    const $ = id => document.getElementById(id);
+    $('hp-pause').onclick = () => { this.send({ t: 'pause', v: !this.paused }); UI.hideOverlay(); };
+    $('hp-time').onclick = () => this.send({ t: 'addTime', min: 5 });
+    $('hp-end').onclick = () => { if (confirm('Encerrar a partida para todos?')) { UI.hideOverlay(); this.send({ t: 'endNow' }); } };
+    const live = () => this.send({ t: 'live', settings: { killLimit: +$('hp-kills').value, respawn: +$('hp-resp').value, ff: $('hp-ff') ? $('hp-ff').checked : false } });
+    $('hp-kills').onchange = live; $('hp-resp').onchange = live; if ($('hp-ff')) $('hp-ff').onchange = live;
+    $('hp-send').onclick = () => { const t = $('hp-say').value.trim(); if (t) { this.send({ t: 'say', text: t }); $('hp-say').value = ''; } };
+    box.querySelectorAll('[data-hp-rm]').forEach(b => b.onclick = () => { this.send({ t: 'removeBot', id: b.dataset.hpRm }); b.parentElement.remove(); });
+    box.querySelectorAll('[data-hp-kick]').forEach(b => b.onclick = () => { this.send({ t: 'kick', id: b.dataset.hpKick }); b.parentElement.remove(); });
+    box.querySelectorAll('[data-hp-ban]').forEach(b => b.onclick = () => { if (confirm('Banir este jogador?')) { this.send({ t: 'kick', id: b.dataset.hpBan, ban: true }); b.parentElement.remove(); } });
   },
 
   renderScore() {

@@ -244,3 +244,19 @@ details.adv[open] summary { margin-bottom: 8px; }
 .x-btn { background: none; border: 1px solid rgba(255,93,93,.5); color: #ffb3b3; border-radius: 6px; cursor: pointer; margin-left: 6px; }
 input[type=range] { width: 100%; }
 @media (max-width: 720px) { .grid3 { grid-template-columns: 1fr; } }
+
+/* v1.7: controles do anfitrião */
+.pass-in { margin-top: 8px; width: 100%; background: #0c2038; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; }
+.tbtn-team { cursor: pointer; border: 0; font: inherit; font-size: .75rem; font-weight: 700; }
+.pl-row { grid-template-columns: 1fr auto auto auto; }
+#lobby-flags:empty { display: none; }
+.host-btn { position: absolute; top: 12px; left: 12px; width: 40px; height: 40px; border-radius: 50%; background: rgba(8,24,44,.85); border: 1px solid var(--accent); color: var(--accent); font-size: 1.1rem; cursor: pointer; pointer-events: auto; }
+.host-btn.hidden { display: none; }
+body.touch .host-btn { left: 62px; top: 10px; }
+.card.host { max-width: 560px; max-height: 92vh; overflow-y: auto; text-align: left; }
+.card.host h3 { margin: 12px 0 6px; font-size: .8rem; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+.hp-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.hp-row select, .hp-row input[type=text] { background: #0c2038; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 7px 8px; font: inherit; }
+.hp-row input[type=text] { flex: 1; min-width: 140px; }
+.hp-pl { display: flex; align-items: center; gap: 8px; padding: 5px 8px; background: #0c2038; border-radius: 8px; margin-bottom: 4px; font-size: .85rem; }
+.hp-pl span { flex: 1; }
