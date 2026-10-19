@@ -1,4 +1,4 @@
-# ⚓ Batalha Naval — v1.5
+# ⚓ Batalha Naval — v1.5.1
 
 Monte seu navio **peça por peça** numa grade (casco, armas, motores, aletas, sensores…) e lute contra ondas de inimigos
 ou contra outros jogadores **online**. Funciona no computador e no **celular** (instalável como app).
@@ -9,7 +9,7 @@ ou contra outros jogadores **online**. Funciona no computador e no **celular** (
 |---|---|
 | **Computador** | Abra `index.html` no navegador (campanha funciona sem servidor). |
 | **Celular / qualquer lugar** | Publique no GitHub Pages (veja abaixo) e abra o link no celular. Toque em *Adicionar à tela inicial* para instalar. |
-| **Online** | Precisa do servidor (`server/`). Veja *Modo online*. |
+| **Online** | Direto pelo GitHub Pages, entre navegadores (P2P). Veja *Modo online*. |
 
 ### Controles
 - **Computador:** `W/S` acelera/ré · `A/D` gira · mouse mira · botão esquerdo = canhões e morteiros · `Espaço`/botão direito = torpedos e mísseis · `P` pausa · `M` som.
@@ -23,32 +23,30 @@ ou contra outros jogadores **online**. Funciona no computador e no **celular** (
   - Você só enxerga até certa distância (650, +300 por radar, até 2). O resto fica na névoa.
   - **Sonar Passivo** (850) e **Sonar Ativo** (1500, pulsa a cada 4 s mas denuncia você a 2200) mostram contatos na névoa.
   - **Furtividade**: com **60%** do casco em *Casco Furtivo* (ou *Gerador Furtivo*), o navio some do mapa, do sonar, do radar e dos **mísseis/torres automáticas**. Só aparece colado (< 170) ou por alguns segundos depois de **atirar** ou pingar sonar.
-- **Online (v1.5):** salas com código, todos-contra-todos ou equipes, orçamento por sala, placar, reaparecimento, e **névoa de guerra feita no servidor** (você só recebe a posição de quem pode ver).
+- **Online (v1.5):** salas com código/link, todos-contra-todos ou equipes, orçamento por sala, placar, reaparecimento, e **névoa de guerra feita pelo anfitrião** (você só recebe a posição de quem pode ver). **Sem servidor** (P2P).
 
-## Modo online
+## Modo online (sem servidor)
 
-O servidor é um programa Node (pasta `server/`) que também **hospeda o próprio jogo**: um único endereço serve o site e o multijogador.
+O online funciona **só com o GitHub Pages**: a partida roda direto entre os navegadores (**P2P / WebRTC via PeerJS**), no mesmo padrão cliente ↔ servidor ↔ clientes, em que o **navegador do anfitrião é o servidor**.
+
+1. Um jogador abre **🌐 Jogar online → Criar sala** (vira o anfitrião) e recebe um **código de 4 letras**.
+2. Os outros abrem o jogo, vão em **Jogar online**, digitam o código — ou abrem o **link de convite** (`…/?sala=CODIGO`, botão *Copiar link* no lobby).
+3. Cada um monta o navio no Estaleiro (o orçamento da sala é validado pelo anfitrião), clica **Estou pronto** e o anfitrião **inicia**.
+
+Dicas e limites:
+- O anfitrião precisa **manter a página aberta e em primeiro plano** (no celular, não bloquear a tela). O melhor aparelho/conexão deve ser o anfitrião.
+- Se o anfitrião sair, a sala acaba.
+- O P2P usa servidores STUN públicos do Google/Twilio e o sinalizador gratuito do PeerJS. Redes muito restritivas (alguns 4G/CGNAT ou Wi‑Fi corporativo) podem impedir a conexão; se acontecer, tente outra rede ou use um servidor dedicado (abaixo). Para usar um servidor TURN próprio, ponha `iceServers` em `config.js`.
+
+### Servidor dedicado (opcional)
+Para uma sala sempre ligada, o repositório inclui um servidor Node que roda **a mesma lógica** (`gameserver.js`):
 
 ```bash
 npm install
-npm start          # http://localhost:8787
+npm start          # http://localhost:8787  (jogo + servidor)
 ```
 
-Teste em rede local (celular na mesma Wi‑Fi): abra `http://IP-DO-PC:8787` no celular e use *Jogar online*.
-
-### Hospedar na internet (grátis)
-O GitHub Pages **não roda servidor**. Hospede o servidor em um destes e use o endereço `wss://…`:
-
-- **Render** (mais simples): *New → Blueprint* apontando para este repositório (usa `render.yaml`). No plano grátis o serviço "dorme" após ~15 min parado; a primeira conexão pode levar ~1 min.
-- **Railway / Fly.io / qualquer VPS com Node ≥ 18**: `npm install && npm start` (há um `Dockerfile` pronto). Defina `PORT` se necessário.
-
-Depois, de **dentro do jogo** (*Jogar online*) cole o endereço (ex.: `wss://batalha-naval.onrender.com`) — ele fica salvo. Para pré-configurar para todos, edite `config.js`:
-
-```js
-window.BN_CONFIG = { serverUrl: 'wss://batalha-naval.onrender.com' };
-```
-
-> Dica: se você abrir o jogo pelo **próprio endereço do servidor** (Render), nada precisa ser configurado.
+Hospede em Render (`render.yaml`), Railway, Fly.io (`Dockerfile`)… e, em *Jogar online → Avançado*, cole o endereço `wss://…` (ou edite `config.js`).
 
 ## GitHub Pages (jogar pelo celular)
 Settings → Pages → *Deploy from a branch* → `main` / `(root)`. O jogo é 100% estático (HTML/CSS/JS) e já inclui `manifest.json` + `sw.js` (instalável e offline na campanha).
@@ -62,10 +60,12 @@ battle.js                       simulação, dano, IA, visão, partículas, rend
 touch.js                        controles de celular
 net.js                          cliente online (lobby, retratos, tiros, placar)
 main.js                         telas e inicialização
-server/server.js                servidor online (Node + ws)
+gameserver.js                   lógica do servidor (salas, validação, névoa) — roda no navegador do anfitrião ou no Node
+server/server.js                servidor dedicado opcional (Node + ws)
+vendor/peerjs.min.js            PeerJS (WebRTC) para o online sem servidor
 manifest.json sw.js icons/      PWA
 ```
 
 ## Como funciona o online (resumo)
-Cada cliente simula **o próprio navio** e envia retratos ~20×/s; tiros são retransmitidos e simulados por todos; quem **leva** o tiro aplica o dano (e avisa quem atirou). O servidor valida o projeto (mesmas regras do jogo, via `parts.js`), limita taxa/entradas e filtra os retratos pela **detecção** (visão, sonar, furtividade, revelação ao atirar).
-Não há autoridade total no servidor: é pensado para jogar com amigos, não para torneios.
+Cada cliente simula **o próprio navio** e envia retratos ~20×/s ao anfitrião; tiros são retransmitidos e simulados por todos; quem **leva** o tiro aplica o dano (e avisa quem atirou). O anfitrião (`gameserver.js`) valida o projeto com as mesmas regras do jogo (`parts.js`), limita taxa/entradas e filtra os retratos pela **detecção** (visão, sonar, furtividade, revelação ao atirar).
+Não há autoridade total (o anfitrião também joga): é pensado para jogar com amigos, não para torneios.

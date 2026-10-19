@@ -1,7 +1,7 @@
 'use strict';
 // Service worker do Batalha Naval: rede primeiro, cache como reserva (jogável offline na campanha).
-const CACHE = 'batalha-naval-v1.5.0';
-const FILES = ['./', 'index.html', 'style.css', 'parts.js', 'builder.js', 'touch.js', 'battle.js', 'net.js', 'main.js', 'config.js',
+const CACHE = 'batalha-naval-v1.5.1';
+const FILES = ['./', 'index.html', 'style.css', 'parts.js', 'gameserver.js', 'builder.js', 'touch.js', 'battle.js', 'net.js', 'main.js', 'config.js', 'vendor/peerjs.min.js',
   'manifest.json', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -14,7 +14,7 @@ self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
   e.respondWith(
-    fetch(req).then(res => {
+    fetch(req, { cache: 'no-cache' }).then(res => {
       if (res.ok) { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); }
       return res;
     }).catch(() => caches.match(req).then(r => r || caches.match('index.html')))

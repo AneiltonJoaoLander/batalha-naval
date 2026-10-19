@@ -86,40 +86,45 @@
     <div id="on-error" class="msg err hidden"></div>
 
     <section class="panel" id="on-connect">
-      <h2>Conectar ao servidor</h2>
+      <h2>Jogar online</h2>
       <label class="field">Seu nome<input id="on-name" maxlength="16" autocomplete="off"></label>
-      <label class="field">Servidor<input id="on-url" placeholder="wss://seu-servidor.onrender.com" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
-      <button class="btn primary big" id="on-connect-btn">Conectar</button>
-      <p class="muted">Cada partida é entre jogadores reais, com o <b>navio que você montou</b>. O servidor valida o orçamento e só mostra a você os inimigos que você detecta (visão, radar, sonar).</p>
+      <div class="on-grid">
+        <div>
+          <h3 class="sub">Criar sala <small>(você é o anfitrião)</small></h3>
+          <label class="field">Modo
+            <select id="cr-mode"><option value="ffa">Todos contra todos</option><option value="teams">Equipes (A × B)</option></select></label>
+          <label class="field">Orçamento por navio
+            <select id="cr-budget"><option value="200">🪙 200</option><option value="300">🪙 300</option><option value="450" selected>🪙 450</option><option value="700">🪙 700</option><option value="1000">🪙 1000</option><option value="1500">🪙 1500</option><option value="0">Sem limite</option></select></label>
+          <label class="field">Abates para vencer
+            <select id="cr-kills"><option>5</option><option>10</option><option selected>15</option><option>20</option><option>30</option><option>50</option></select></label>
+          <label class="field">Tempo
+            <select id="cr-min"><option value="5">5 min</option><option value="10" selected>10 min</option><option value="15">15 min</option><option value="20">20 min</option><option value="0">Sem limite</option></select></label>
+          <button class="btn primary big" id="on-create">Criar sala</button>
+        </div>
+        <div>
+          <h3 class="sub">Entrar em uma sala</h3>
+          <div class="join-line"><input id="on-code" maxlength="4" placeholder="CÓDIGO" autocomplete="off" autocapitalize="characters"><button class="btn" id="on-join">Entrar</button></div>
+          <p class="muted">Peça ao anfitrião o <b>código</b> ou o <b>link</b> da sala.</p>
+          <div id="on-rooms-wrap" class="hidden">
+            <h3 class="sub">Salas abertas <button class="btn small" id="on-refresh">↻</button></h3>
+            <div id="on-rooms"></div>
+          </div>
+        </div>
+      </div>
+      <p class="muted">Sem servidor para hospedar: a partida roda direto entre os navegadores (P2P). O <b>anfitrião</b> mantém a página aberta e funciona como servidor; ele valida o orçamento e só mostra a cada jogador os inimigos que ele detecta (visão, radar, sonar). Dica: o melhor aparelho/conexão deve ser o anfitrião.</p>
+      <details class="adv">
+        <summary>Avançado: servidor dedicado (opcional)</summary>
+        <label class="field">Endereço do servidor<input id="on-url" placeholder="wss://meu-servidor.onrender.com" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+        <button class="btn" id="on-connect-btn">Conectar ao servidor</button>
+      </details>
     </section>
 
     <section class="panel hidden" id="on-conn-info">
-      <div class="conn-line">Conectado como <b id="on-who"></b> <button class="btn small" id="on-disconnect">Desconectar</button></div>
+      <div class="conn-line">Servidor dedicado: conectado como <b id="on-who"></b> <button class="btn small" id="on-disconnect">Desconectar</button></div>
     </section>
 
-    <div class="on-grid hidden" id="on-menu">
-      <section class="panel">
-        <h2>Criar sala</h2>
-        <label class="field">Modo
-          <select id="cr-mode"><option value="ffa">Todos contra todos</option><option value="teams">Equipes (A × B)</option></select></label>
-        <label class="field">Orçamento por navio
-          <select id="cr-budget"><option value="200">🪙 200</option><option value="300">🪙 300</option><option value="450" selected>🪙 450</option><option value="700">🪙 700</option><option value="1000">🪙 1000</option><option value="1500">🪙 1500</option><option value="0">Sem limite</option></select></label>
-        <label class="field">Abates para vencer
-          <select id="cr-kills"><option>5</option><option>10</option><option selected>15</option><option>20</option><option>30</option><option>50</option></select></label>
-        <label class="field">Tempo
-          <select id="cr-min"><option value="5">5 min</option><option value="10" selected>10 min</option><option value="15">15 min</option><option value="20">20 min</option><option value="0">Sem limite</option></select></label>
-        <button class="btn primary big" id="on-create">Criar sala</button>
-      </section>
-      <section class="panel">
-        <h2>Entrar em sala</h2>
-        <div class="join-line"><input id="on-code" maxlength="4" placeholder="CÓDIGO" autocomplete="off" autocapitalize="characters"><button class="btn" id="on-join">Entrar</button></div>
-        <h3 class="sub">Salas abertas <button class="btn small" id="on-refresh">↻</button></h3>
-        <div id="on-rooms"></div>
-      </section>
-    </div>
-
     <section class="panel hidden" id="on-lobby">
-      <h2>Sala <span class="code" id="lobby-code"></span></h2>
+      <h2>Sala <span class="code" id="lobby-code"></span> <button class="btn small" id="on-copy" title="Copiar o link de convite">🔗 Copiar link</button></h2>
       <div class="lobby-grid">
         <div>
           <div id="lobby-players"></div>
@@ -205,6 +210,7 @@
 </main>
 
 <script src="parts.js"></script>
+<script src="gameserver.js"></script>
 <script src="builder.js"></script>
 <script src="touch.js"></script>
 <script src="battle.js"></script>
