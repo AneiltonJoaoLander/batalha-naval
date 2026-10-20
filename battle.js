@@ -63,9 +63,13 @@ const SFX = {
 
 /* vizinhança 4 e chances de incêndio */
 const N4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-const FIRE_CH = { shell: 0.16, heavy: 0.08, bullet: 0.03, flame: 0.02, rail: 0.05, mortar: 0.28, torp: 0.3, missile: 0.34, mine: 0.3, depth: 0.1, melee: 0.05, cook: 0.35, bomb: 0.2 };
-const FLAMMABLE = { engine: 1.8, torp: 1.6, missile: 1.6, mortar: 1.5, cannon: 1.3, depth: 1.4, mine: 1.3, mg: 1.1, repair: 0.8, shield: 0.6 };
-const AMMO = new Set(['torp', 'missile', 'mortar', 'depth', 'mine']);
+const FIRE_CH = { shell: 0.16, heavy: 0.08, bullet: 0.03, flame: 0.02, rail: 0.05, mortar: 0.28, torp: 0.3, missile: 0.34, mine: 0.3, depth: 0.1, melee: 0.05, cook: 0.35, bomb: 0.2, ballistic: 0.45 };
+const FLAMMABLE = { engine: 1.8, torp: 1.6, missile: 1.6, mortar: 1.5, cannon: 1.3, depth: 1.4, mine: 1.3, mg: 1.1, repair: 0.8, shield: 0.6, ballistic: 1.7, flare: 1.4, plate: 0.6 };
+const AMMO = new Set(['torp', 'missile', 'mortar', 'depth', 'mine', 'ballistic', 'flare']);
+/** projéteis de tiro direto que param nas ilhas */
+const LAND_BLOCK = new Set(['shell', 'bullet', 'heavy', 'flame', 'rail', 'torp', 'missile']);
+/** célula protegida contra fogo (casco corta-fogo ou placa corta-fogo por cima) */
+const fireproofCell = c => !!(PARTS[c.base].fireproof || (c.top && PARTS[c.top.type].fireproof));
 
 /* ----------------------------------------------------------------- NAVIO */
 class Ship {
@@ -95,9 +99,9 @@ class Ship {
     this.ox = sx / n; this.oy = sy / n;
     this.initialHull = n; this.maxHullHp = hp;
     this.cost = shipStats(all).cost;
-    this.input = { throttle: 0, steer: 0, aimX: x, aimY: y, fireMain: false, fireTorp: false, fireMissile: false, fireAux: false, dive: false };
+    this.input = { throttle: 0, steer: 0, aimX: x, aimY: y, fireMain: false, fireTorp: false, fireMissile: false, fireAux: false, dive: false, fireBallistic: false, strike: false, strikeX: 0, strikeY: 0 };
     this.shield = 0; this.shieldHit = 0; this.shieldFlash = 0; this.label = '';
-    this.depth = 0; this.diveCmd = false; this.battery = 0; this.sub = false; this.quiet = 1; this.visMul = 1;
+    this.depth = 0; this.diveCmd = false; this.battery = 0; this.sub = false; this.quiet = 1; this.visMul = 1; this.envMul = (typeof Battle !== 'undefined' && Battle.envMul) || 1;
     this.water = 0; this.leak = 0; this.wet = 0; this.fx = {}; this.hooked = 0; this.crewT = 0; this.fireT = 1; this.healT = 1; this.burning = 0; this.sensorMul = 1; this.floodCap = 30;
     this.ai = null; this.reloadMul = 1; this.smokeT = 0; this.wakeT = 0;
     this.ca = Math.cos(ang); this.sa = Math.sin(ang);
@@ -108,7 +112,7 @@ class Ship {
   refresh() {
     this.list = [...this.cells.values()];
     this.stats = shipStats(this.list.map(c => ({ base: c.base, top: c.top ? c.top.type : null, crew: c.crew })));
-    let r = 0, bow = null, hw = 0, hl = 0, maxR = 0, mgR = 0, flame = false;
+    let r = 0, bow = null, hw = 0, hl = 0, maxR = 0, mgR = 0, missR = 0, flame = false;
     for (const c of this.list) {
       const lx = (c.gx + 0.5 - this.ox) * CS, ly = (c.gy + 0.5 - this.oy) * CS;
       r = Math.max(r, Math.hypot(lx, ly) + CS * 0.75);
@@ -118,16 +122,17 @@ class Ship {
         const P = PARTS[c.top.type];
         if (P.kind === 'cannon' || P.kind === 'mortar') maxR = Math.max(maxR, P.range);
         if (P.kind === 'mg') { mgR = Math.max(mgR, P.range); if (P.bullet === 'flame') flame = true; }
+        if (P.kind === 'missile') missR = Math.max(missR, P.range * 0.9);
       }
     }
     this.radius = r; this.bow = bow; this.hw = hw; this.hl = hl;
-    this.maxRange = maxR; this.mgRange = mgR;
+    this.maxRange = maxR; this.mgRange = mgR; this.missRange = missR;
     this.hasTorp = this.stats.torps > 0;
-    this.rammer = !maxR && !this.stats.torps && !this.stats.missiles && (flame || this.stats.melee > 0);
+    this.rammer = !maxR && !this.stats.torps && !this.stats.missiles && !this.stats.ballistics && (flame || this.stats.melee > 0);
     this.shieldMax = this.stats.shield;
     this.shield = Math.min(this.shield, this.shieldMax);
     // sensores e furtividade (os mesmos campos que detects() lê)
-    this.vision = this.stats.vision * this.visMul * this.sensorMul; this.sonar = this.stats.sonarR * this.sensorMul; this.pingR = this.stats.pingR * this.sensorMul;
+    this.vision = this.stats.vision * this.visMul * this.envMul * this.sensorMul; this.sonar = this.stats.sonarR * this.sensorMul; this.pingR = this.stats.pingR * this.sensorMul;
     this.sig = this.stats.sig; this.cover = this.stats.cover;
     this.isSub = this.stats.sub; this.maxBattery = this.stats.battery; this.battery = Math.min(this.battery, this.maxBattery);
     this.crewCells = this.list.filter(c => c.crew);
@@ -149,6 +154,21 @@ class Ship {
     if (dx * dx + dy * dy > this.radius * this.radius) return null;
     const lx = dx * this.ca + dy * this.sa, ly = -dx * this.sa + dy * this.ca;
     return this.cells.get(Math.floor(lx / CS + this.ox) + ',' + Math.floor(ly / CS + this.oy)) || null;
+  }
+
+  /** posição do motor mais quente (alvo dos mísseis térmicos); motor elétrico é frio, placa isolante esconde o calor */
+  heatPoint() {
+    let best = null, bs = 0;
+    for (const c of this.list) {
+      if (c.dead || !c.top) continue;
+      const P = PARTS[c.top.type];
+      if (P.kind !== 'engine') continue;
+      let h = P.thrust * (P.electric ? 0.2 : 1);
+      for (const [dx, dy] of N4) { const n = this.cells.get((c.gx + dx) + ',' + (c.gy + dy)); if (n && n.top && PARTS[n.top.type].heatShield) h *= PARTS[n.top.type].heatShield; }
+      if (this.flame < 0.1) h *= 0.6;                                      // motor sem acelerar esfria
+      if (h > bs) { bs = h; best = c; }
+    }
+    return best ? this.cellWorld(best) : [this.x, this.y];
   }
 
   hullHp() { let s = 0; for (const c of this.list) if (isHull(c.base)) s += c.hp; return s; }
@@ -212,7 +232,7 @@ class Ship {
   breach(amt) { if (!this.sinking && !this.remote) this.leak = Math.min(14, this.leak + amt); }
 
   tryIgnite(c, src, dmg, blast, owner) {
-    if (this.sinking || c.dead || c.fire > 0 || PARTS[c.base].fireproof) return;
+    if (this.sinking || c.dead || c.fire > 0 || fireproofCell(c)) return;
     let ch = FIRE_CH[src] !== undefined ? FIRE_CH[src] : 0.06;
     if (c.top) ch *= FLAMMABLE[PARTS[c.top.type].kind] || 1; else ch *= 0.35;       // casco nu pega fogo bem menos que peças com munição/combustível
     if (this.depth > DEEP) ch *= 0.25;                                    // submerso: quase não pega fogo
@@ -276,7 +296,7 @@ class Ship {
     }
     this.fx = fx;
     const sm = 1 + 0.25 * Math.min(1.5, fx.s);
-    if (sm !== this.sensorMul) { this.sensorMul = sm; this.sonar = this.stats.sonarR * sm; this.pingR = this.stats.pingR * sm; if (!this.isSub) this.vision = this.stats.vision * this.visMul * sm; }
+    if (sm !== this.sensorMul) { this.sensorMul = sm; this.sonar = this.stats.sonarR * sm; this.pingR = this.stats.pingR * sm; if (!this.isSub) this.vision = this.stats.vision * this.visMul * this.envMul * sm; }
   }
 
   updateFires(dt) {
@@ -292,7 +312,7 @@ class Ship {
         if (c.dead) continue;
         for (const [dx, dy] of N4) {                                      // espalha
           const n = this.cells.get((c.gx + dx) + ',' + (c.gy + dy));
-          if (!n || n.dead || n.fire > 0 || PARTS[n.base].fireproof) continue;
+          if (!n || n.dead || n.fire > 0 || fireproofCell(n)) continue;
           const ch = 0.12 * (n.top ? (FLAMMABLE[PARTS[n.top.type].kind] || 1) : 1) * (1 - 0.4 * Math.min(1, this.fx.b || 0));
           if (Math.random() < ch) { n.fire = 7; n.fireBy = c.fireBy; }
         }
@@ -410,10 +430,10 @@ class Ship {
     this.sub = this.depth > DEEP;
     if (this.sub) {
       if (!st.nuclear) this.battery = Math.max(0, this.battery - dt * (this.speed > st.maxSpeedSub * 0.7 ? 1.5 : 1));
-      this.vision = (st.periscopes ? 650 : 350) * this.visMul * this.sensorMul;              // radar não funciona submerso
+      this.vision = (st.periscopes ? 650 : 350) * this.visMul * this.envMul * this.sensorMul;              // radar não funciona submerso
     } else {
       this.battery = Math.min(this.maxBattery, this.battery + dt * 3);
-      this.vision = st.vision * this.visMul * this.sensorMul;
+      this.vision = st.vision * this.visMul * this.envMul * this.sensorMul;
     }
   }
 
@@ -535,7 +555,7 @@ class Ship {
     if (t.cd > 0) t.cd -= dt;
     if (t.recoil > 0) t.recoil = Math.max(0, t.recoil - dt * 5);
     const [wx, wy] = this.cellWorld(c);
-    if (this.depth > 0.3 && (P.kind === 'cannon' || P.kind === 'mortar' || P.kind === 'mg' || P.kind === 'missile' || P.kind === 'depth' || P.kind === 'pd')) return;   // submerso: só torpedos, minas e sensores
+    if (this.depth > 0.3 && (P.kind === 'cannon' || P.kind === 'mortar' || P.kind === 'mg' || P.kind === 'missile' || P.kind === 'ballistic' || P.kind === 'flare' || P.kind === 'depth' || P.kind === 'pd')) return;   // submerso: só torpedos, minas e sensores
     switch (P.kind) {
       case 'cannon': {
         const [ax, ay] = this.aimPoint(wx, wy, P.speed);
@@ -575,12 +595,19 @@ class Ship {
       }
       case 'mg': {
         t.tt -= dt;
-        if (t.tt <= 0) { t.tt = 0.25; t.tgt = Battle.nearestEnemy(this, wx, wy, P.range); }
-        const tg = t.tgt;
+        if (t.tt <= 0) {
+          t.tt = 0.25; t.tgt = Battle.nearestEnemy(this, wx, wy, P.range);
+          t.dtg = P.bullet !== 'flame' ? Battle.nearestEnemyDrone(this, wx, wy, P.range) : null;           // drones inimigos têm prioridade
+        }
+        if (t.dtg && (t.dtg.dead || Math.hypot(t.dtg.x - wx, t.dtg.y - wy) > P.range + 20)) t.dtg = null;
+        const tg = t.dtg || t.tgt;
         if (tg && !tg.sinking && !tg.dead) {
-          const want = Math.atan2(tg.x - wx, -(tg.y - wy));
+          const isD = !!tg.drone, dist0 = Math.hypot(tg.x - wx, tg.y - wy);
+          const lead = isD ? dist0 / P.speed : 0;                                                          // antecipa o movimento do drone
+          const px = tg.x + (isD ? (tg.vx || 0) * lead : 0), py = tg.y + (isD ? (tg.vy || 0) * lead : 0);
+          const want = Math.atan2(px - wx, -(py - wy));
           t.ang = turnToward(t.ang, want, P.turn * this.stats.turnMul * dt);
-          if (t.cd <= 0 && Math.abs(angDiff(want, t.ang)) < 0.12 && Math.hypot(tg.x - wx, tg.y - wy) < P.range + tg.radius * 0.5) {
+          if (t.cd <= 0 && Math.abs(angDiff(want, t.ang)) < 0.12 && dist0 < P.range + (tg.radius || 0) * 0.5) {
             t.cd = P.reload * this.rl; t.recoil = 1;
             const a = t.ang + rand(-P.spread, P.spread), [ax, ay] = dirOf(a);
             const mx = wx + ax * CS * 0.55, my = wy + ay * CS * 0.55;
@@ -629,13 +656,49 @@ class Ship {
       }
       case 'missile':
         if (inp.fireMissile && t.cd <= 0) {
-          const target = Battle.pickGuidedTarget(this);
-          if (!target) break;
+          const lock = P.lock || 'radar';
+          let target = null, gx = 0, gy = 0;
+          if (lock === 'gps') {                                                    // voa para as coordenadas do cursor (não precisa enxergar o alvo)
+            const dx0 = inp.aimX - wx, dy0 = inp.aimY - wy, dl = Math.hypot(dx0, dy0) || 1, k = Math.min(1, (P.range * 0.95) / dl);
+            if (dl < 60) break;
+            gx = wx + dx0 * k; gy = wy + dy0 * k;
+          } else {
+            target = Battle.pickGuidedTarget(this);
+            if (!target) break;
+          }
           t.cd = P.reload * this.rl; t.recoil = 1;
           const [dx, dy] = dirOf(this.ang);
-          Battle.shoot({ kind: 'missile', x: wx + dx * CS * 0.8, y: wy + dy * CS * 0.8, ang: this.ang, speed: P.speed, vx: dx * P.speed, vy: dy * P.speed,
-            life: P.range / P.speed, dmg: P.dmg, splash: P.splash, turn: P.turn, team: this.team, owner: this.id, target });
+          Battle.shoot({ kind: 'missile', lock, size: P.size, x: wx + dx * CS * 0.8, y: wy + dy * CS * 0.8, ang: this.ang, speed: P.speed, vx: dx * P.speed, vy: dy * P.speed,
+            life: P.range / P.speed, dmg: P.dmg, splash: P.splash, turn: P.turn, team: this.team, owner: this.id, target, gx, gy, ownerShip: this });
           SFX.play('torp', wx, wy); this.doReveal(900, 1.5);
+        }
+        break;
+      case 'ballistic':
+        if (inp.fireBallistic && t.cd <= 0 && inp.strike) {
+          const dist = Math.hypot(inp.strikeX - wx, inp.strikeY - wy);
+          if (dist < P.minRange) break;
+          t.cd = P.reload * this.rl; t.recoil = 1;
+          const d = Math.min(dist, P.range), ux = (inp.strikeX - wx) / dist, uy = (inp.strikeY - wy) / dist;
+          const sc = rand(0, P.scatter * (0.35 + d / P.range) * this.stats.scatterMul), sa = rand(0, TAU);
+          const tx = wx + ux * d + Math.cos(sa) * sc, ty = wy + uy * d + Math.sin(sa) * sc, T = Math.max(2.4, d / P.speed);
+          Battle.shoot({ kind: 'ballistic', size: P.size, x: wx, y: wy, x0: wx, y0: wy, tx, ty, T, life: T, dmg: P.dmg, splash: P.splash, team: this.team, owner: this.id });
+          for (let i = 0; i < 10; i++) Battle.addP({ t: 'smoke', x: wx, y: wy, vx: rand(-40, 40), vy: rand(-60, -10), life: rand(1, 2), s: rand(6, 11), g: 14, a: 0.9 });
+          Battle.addP({ t: 'flash', x: wx, y: wy, life: 0.25, s: 20, g: 60 });
+          SFX.play('boom', wx, wy); this.doReveal(1500, 3);
+        }
+        break;
+      case 'flare':
+        if (t.cd <= 0) {
+          let danger = null;
+          for (const sh of Battle.shots) {
+            if (sh.dead || sh.kind !== 'missile' || sh.lock !== 'heat' || sh.team === this.team) continue;
+            if (sh.target === this || Math.hypot(sh.x - this.x, sh.y - this.y) < this.radius + 120) { if (Math.hypot(sh.x - wx, sh.y - wy) < P.range) { danger = sh; break; } }
+          }
+          if (danger) {
+            t.cd = P.reload * this.rl; t.recoil = 1;
+            for (let i = 0; i < P.salvo; i++) Battle.addFlare(wx, wy, this.team, P.life, this.vx, this.vy, danger.ang + (i % 2 ? 1 : -1) * (Math.PI / 2 + rand(-0.35, 0.35)));   // iscas saem de lado, para longe da rota do míssil
+            SFX.play('hit', wx, wy);
+          }
         }
         break;
       case 'pd': {
@@ -663,14 +726,16 @@ class Ship {
         break;
       }
       case 'hangar': {
-        if (t.drone && !t.drone.dead && Battle.drones.includes(t.drone)) break;          // drone no ar
-        t.drone = null;
+        if (t.drones && t.drones.some(d => !d.dead && Battle.drones.includes(d))) break;   // drone(s) no ar
+        t.drones = null; t.drone = null;
         t.dcd = (t.dcd === undefined ? 2 : t.dcd) - dt;
         if (t.dcd > 0 || this.depth > 0.3) break;
-        if (P.drone === 'kamikaze') {
+        const dk = P.drone;
+        if (dk === 'kamikaze' || dk === 'swarm' || dk === 'torpedo') {
           if (!(this.ai ? true : inp.fireMissile) || !Battle.pickGuidedTarget(this)) break;     // só sai quando mandado e há alvo detectado
-        } else if (P.drone === 'attack' && this.ai && !Battle.pickTarget(this)) break;
-        t.drone = Battle.launchDrone(this, c);
+        } else if ((dk === 'attack' || dk === 'bomber') && this.ai && !Battle.pickTarget(this)) break;
+        t.drones = Battle.launchDrone(this, c);
+        t.drone = t.drones[0];
         break;
       }
       case 'sprinkler':
@@ -695,7 +760,7 @@ class Ship {
         break;
       case 'jammer':
         for (const sh of Battle.shots)
-          if ((sh.kind === 'missile' || (sh.kind === 'torp' && sh.turn)) && sh.team !== this.team && !sh.dead && Math.hypot(sh.x - wx, sh.y - wy) < P.range) sh.jam = 1.5;
+          if ((sh.kind === 'missile' || (sh.kind === 'torp' && sh.turn)) && sh.lock !== 'heat' && sh.lock !== 'gps' && sh.team !== this.team && !sh.dead && Math.hypot(sh.x - wx, sh.y - wy) < P.range) sh.jam = 1.5;
         break;
       case 'repair': {
         t.acc += dt;
@@ -772,7 +837,7 @@ class Ship {
   }
 
   weaponStatus() {
-    const acc = { cannon: [0, 0], mortar: [0, 0], torp: [0, 0], mine: [0, 0] };
+    const acc = { cannon: [0, 0], mortar: [0, 0], torp: [0, 0], mine: [0, 0], ballistic: [0, 0] };
     for (const c of this.list) {
       if (!c.top) continue;
       const P = PARTS[c.top.type], k = P.kind === 'missile' ? 'torp' : P.kind === 'depth' ? 'mortar' : P.kind;
@@ -801,14 +866,19 @@ const Battle = {
   ships: [], shots: [], parts: [], player: null, cam: { x: 0, y: 0 }, shake: 0, time: 0,
   keys: new Set(), mouse: { x: 0, y: 0, left: false, right: false },
   wave: 1, state: 'idle', running: false, last: 0, clearTimer: 0, overTimer: 0,
-  runCoins: 0, kills: 0, design: null, hud: {}, mode: 'campaign', drones: [], noFog: false, friendlyFire: false, hostPaused: false, teamLast: {}, skirmish: null, localIds: new Set(), zoom: 1, shotSeq: 0, myDesign: null, cfg: null, deadNotice: false, contacts: new Map(), obs: [], aiAware: true, aiLast: { x: 0, y: 0 }, stealthT: 0,
+  runCoins: 0, kills: 0, design: null, hud: {}, mode: 'campaign', drones: [], flares: [], map: null, islands: [], env: null, envMul: 1, objMode: '', zoneState: null, objState: null, strikePt: null, respawnQ: [], mission: null, wxT: 0, bolt: 0, drops: [], noFog: false, friendlyFire: false, hostPaused: false, teamLast: {}, skirmish: null, localIds: new Set(), zoom: 1, shotSeq: 0, myDesign: null, cfg: null, deadNotice: false, contacts: new Map(), obs: [], aiAware: true, aiLast: { x: 0, y: 0 }, stealthT: 0,
 
   init() {
     this.canvas = document.getElementById('game'); this.ctx = this.canvas.getContext('2d');
     this.mini = document.getElementById('minimap'); this.mctx = this.mini.getContext('2d');
-    for (const id of ['wave', 'enemies', 'coins', 'hp-fill', 'hp-text', 'speed', 'cd-cannon', 'cd-torp', 'cd-mortar', 'row-cannon', 'row-torp', 'row-mortar', 'row-shield', 'shield-fill', 'row-stealth', 'stealth-fill', 'vision', 'row-depth', 'depth-fill', 'row-batt', 'batt-fill', 'row-mine', 'cd-mine', 'row-flood', 'flood-fill', 'row-fire', 'fire-text', 'crew'])
+    for (const id of ['wave', 'enemies', 'coins', 'hp-fill', 'hp-text', 'speed', 'cd-cannon', 'cd-torp', 'cd-mortar', 'row-cannon', 'row-torp', 'row-mortar', 'row-shield', 'shield-fill', 'row-stealth', 'stealth-fill', 'vision', 'row-depth', 'depth-fill', 'row-batt', 'batt-fill', 'row-mine', 'cd-mine', 'row-flood', 'flood-fill', 'row-fire', 'fire-text', 'crew', 'row-ball', 'cd-ball'])
       this.hud[id] = document.getElementById('hud-' + id);
     this.fogCv = document.createElement('canvas'); this.fogCtx = this.fogCv.getContext('2d');
+    this.mini.addEventListener('pointerdown', e => {                  // clique/toque no minimapa marca a região do míssil balístico
+      e.preventDefault(); e.stopPropagation();
+      const r = this.mini.getBoundingClientRect();
+      this.setStrike(-HALF + (e.clientX - r.left) / r.width * WORLD, -HALF + (e.clientY - r.top) / r.height * WORLD);
+    });
     window.addEventListener('resize', () => this.resize());
     window.addEventListener('keydown', e => {
       if (!this.running) return;
@@ -844,6 +914,14 @@ const Battle = {
     this.fogCv.width = this.W; this.fogCv.height = this.H;
   },
 
+  /** marca (ou desmarca, se tocar no mesmo lugar) a região do ataque balístico */
+  setStrike(x, y) {
+    if (!this.player || !this.running) return;
+    if (this.strikePt && Math.hypot(this.strikePt.x - x, this.strikePt.y - y) < WORLD * 0.04) { this.strikePt = null; UI.banner('ALVO DESMARCADO', ''); return; }
+    this.strikePt = { x: clamp(x, -HALF, HALF), y: clamp(y, -HALF, HALF) };
+    UI.banner('REGIÃO MARCADA', this.player.stats.ballistics ? 'Tecla B (ou botão 🎯) lança o míssil balístico' : 'Você não tem míssil balístico');
+  },
+
   /* ---------------------------------------------------------------- zoom */
   loadZoom() {
     const z = Meta.zoom;
@@ -860,19 +938,41 @@ const Battle = {
     SFX.init();
     this.mode = 'campaign'; document.getElementById('screen-battle').classList.remove('online');
     setArena(3600); this.noFog = false; this.friendlyFire = false; this.hostPaused = false;
-    this.design = design; this.wave = wave; this.runCoins = 0; this.kills = 0;
+    this.objMode = (skirmish && skirmish.mode) || ''; this.objState = null; this.zoneState = null; this.respawnQ = []; this.mission = null; this.strikePt = null; this.flares = [];
+    document.getElementById('screen-battle').classList.toggle('objmode', !!this.objMode);
+    this.setMap(this.offlineMap(this.objMode));
+    this.design = design; this.myDesign = design; this.wave = wave; this.runCoins = 0; this.kills = 0;
     this.clearTimer = 0; this.overTimer = 0;
     this.ships = []; this.shots = []; this.parts = []; this.time = 0; this.shake = 0;
-    this.player = new Ship(design, 'p', 0, 0, 0); this.player.id = 'me';
+    const sp0 = this.objMode ? pickSpawn(this.map, 'A', Math.random, []) : { x: 0, y: 0, a: 0 };
+    this.player = new Ship(design, 'p', sp0.x, sp0.y, sp0.a); this.player.id = 'me';
     this.ships.push(this.player); this.stealthT = 0; this.teamLast = {}; this.skirmish = null; this.localIds = new Set(); this.drones = [];
     this.zoom = this.loadZoom();
-    this.cam.x = 0; this.cam.y = 0;
+    this.cam.x = sp0.x; this.cam.y = sp0.y;
     this.keys.clear(); this.mouse.left = this.mouse.right = false;
     this.resize();
     this.skirmish = skirmish || null;
-    if (this.skirmish) this.spawnSkirmish(); else this.spawnWave();
+    if (this.objMode) this.startObjective(this.skirmish);
+    else if (this.skirmish) this.spawnSkirmish(); else this.spawnWave();
     this.state = 'playing';
     if (!this.running) { this.running = true; this.last = performance.now(); requestAnimationFrame(t => this.loop(t)); }
+  },
+
+  /* ----------------------------------------------------------- mapa */
+  /** aplica um mapa (ilhas, ambiente): vale para as próximas criações de navio */
+  setMap(map) {
+    this.map = map || null; this.islands = map ? map.islands : [];
+    this.env = (map && BIOMES[map.env]) || BIOMES.oceano;
+    this.envMul = this.env.vis;
+    this.drops = [];
+    if (this.env.rain) for (let i = 0; i < 140; i++) this.drops.push({ x: Math.random(), y: Math.random(), v: 0.7 + Math.random() * 0.6 });
+    this.bolt = 0; this.wxT = rand(4, 10);
+  },
+  /** mapa do modo offline (campanha usa as opções de Meta.map) */
+  offlineMap(mode) {
+    const M = Meta.map || { env: 'rand', level: 2 };
+    const env = (M.env === 'rand' || !BIOMES[M.env]) ? BIOME_KEYS[(Math.random() * BIOME_KEYS.length) | 0] : M.env;
+    return genMap((Math.random() * 1e9) | 0, 3600, env, M.level == null ? 2 : M.level, mode || '');
   },
 
   stop() { this.running = false; this.state = 'idle'; },
@@ -882,6 +982,9 @@ const Battle = {
     SFX.init();
     this.mode = 'online'; document.getElementById('screen-battle').classList.add('online');
     setArena(cfg.settings.arena || 3600); this.hostPaused = false; this.applyRules(cfg.settings);
+    this.objMode = (cfg.settings.mode === 'zone' || cfg.settings.mode === 'convoy') ? cfg.settings.mode : ''; this.objState = null; this.zoneState = null; this.respawnQ = []; this.mission = null; this.strikePt = null; this.flares = [];
+    document.getElementById('screen-battle').classList.toggle('objmode', !!this.objMode);
+    this.setMap(genMap(cfg.map.seed, cfg.settings.arena || 3600, cfg.map.env, cfg.map.level, this.objMode));
     this.cfg = cfg; this.myDesign = cfg.me.design; this.shotSeq = 0; this.deadNotice = false;
     this.wave = 0; this.runCoins = 0; this.kills = 0;
     this.ships = []; this.shots = []; this.parts = []; this.time = 0; this.shake = 0;
@@ -891,7 +994,7 @@ const Battle = {
     this.ships.push(this.player);
     for (const p of cfg.players) {
       if (p.id === cfg.me.id) continue;
-      if (p.bot && p.owner === cfg.me.id) this.addLocalBot(p, cfg.spawns[p.id]); else this.addRemote(p, cfg.spawns[p.id]);   // meus bots rodam aqui
+      if (p.bot && p.owner === cfg.me.id) { const b = this.addLocalBot(p, cfg.spawns[p.id]); if (p.cargo) b.cargo = true; } else this.addRemote(p, cfg.spawns[p.id]);   // meus bots rodam aqui
     }
     this.cam.x = sp.x; this.cam.y = sp.y;
     this.keys.clear(); this.mouse.left = this.mouse.right = false;
@@ -905,7 +1008,7 @@ const Battle = {
   sameTeam(s, team, owner) { return s.team === team && !(this.friendlyFire && s.id !== owner); },
   addRemote(p, sp) {
     const s = new Ship(p.design, p.team, sp ? sp.x : 0, sp ? sp.y : 0, sp ? sp.a : 0);
-    s.id = p.id; s.label = p.name; s.remote = true; s.seenT = 0; s.net = null;
+    s.id = p.id; s.label = p.name; s.remote = true; s.seenT = 0; s.net = null; s.cargo = !!p.cargo;
     this.ships.push(s); return s;
   },
   addLocalBot(p, sp) {
@@ -916,7 +1019,7 @@ const Battle = {
     const p = this.cfg.players.find(q => q.id === id);
     if (!p) return;
     this.ships = this.ships.filter(q => q.id !== id);
-    this.addLocalBot(p, { x, y, a });
+    const b = this.addLocalBot(p, { x, y, a }); if (p.cargo) b.cargo = true;
   },
   localBots() { return this.ships.filter(s => s.ai && !s.remote && !s.dead); },
   shipById(id) { return this.ships.find(s => s.id === id); },
@@ -937,7 +1040,8 @@ const Battle = {
     const lag = clamp((Online.pingMs || 0) / 2000, 0, 0.3);
     const p = { kind: m.kind, id: m.id, owner: m.owner, team: m.team, x: m.x + m.vx * lag, y: m.y + m.vy * lag, vx: m.vx, vy: m.vy, life: m.life - lag,
       dmg: m.dmg, pierce: m.pierce, big: m.big, splash: m.splash, turn: m.turn, ang: m.ang, speed: m.speed, tx: m.tx, ty: m.ty, T: m.T, x0: m.x0, y0: m.y0,
-      fuse: m.fuse, dmgSurf: m.dmgSurf, arm: m.arm, age: 0, remoteOwned: true };
+      fuse: m.fuse, dmgSurf: m.dmgSurf, arm: m.arm, age: 0, remoteOwned: true, lock: m.lk || undefined, size: m.sz || undefined, gx: m.gx || 0, gy: m.gy || 0 };
+    if (p.lock === 'tele') p.lock = 'radar';                                        // sem o cursor do dono: o teleguiado vira radar nas outras telas
     if (m.kind === 'missile' || (m.kind === 'torp' && m.turn)) p.target = this.shipById(m.tg) || null;
     this.shots.push(p);
     if (this.inVision(p.x, p.y)) this.addP({ t: 'flash', x: p.x, y: p.y, life: 0.09, s: 9, g: 20 });
@@ -1023,20 +1127,26 @@ const Battle = {
     UI.banner('ESCARAMUÇA', list.length + (list.length > 1 ? ' bots' : ' bot') + ' · ' + BOT_DIFFS[this.skirmish.diff || cfg.diff].name);
   },
 
-  /** distribui os bots em volta do jogador */
+  /** distribui os bots em volta do jogador (longe das ilhas) */
   placeBots(list, diffKey) {
     const base = rand(0, TAU), pl = this.player;
     this.teamLast.e = { x: pl.x, y: pl.y };
     list.forEach((p, i) => {
-      const a = base + i * (TAU / list.length) + rand(-0.3, 0.3), d = rand(750, 1050), lim = HALF - 250;
-      const x = clamp(pl.x + Math.sin(a) * d, -lim, lim), y = clamp(pl.y - Math.cos(a) * d, -lim, lim);
-      this.ships.push(this.makeBot(p.design, 'e', x, y, Math.atan2(pl.x - x, -(pl.y - y)), p.name, diffKey, 'ai' + i));
+      let x = 0, y = 0;
+      for (let k = 0; k < 20; k++) {
+        const a = base + i * (TAU / list.length) + rand(-0.3, 0.3) + k * 0.5, d = rand(750, 1050), lim = HALF - 250;
+        x = clamp(pl.x + Math.sin(a) * d, -lim, lim); y = clamp(pl.y - Math.cos(a) * d, -lim, lim);
+        if (!this.map || freeOfIslands(this.map, x, y, 120)) break;
+      }
+      const b = this.makeBot(p.design, 'e', x, y, Math.atan2(pl.x - x, -(pl.y - y)), p.name, diffKey, 'ai' + i);
+      b.preset = p; b.diffKey = diffKey; this.ships.push(b);
     });
   },
 
   onSunk(ship) {
     this.explosion(ship.x, ship.y, 2);
     if (this.mode === 'online') { if (ship === this.player) Online.sendDied(ship.lastAttacker); else if (!ship.remote && ship.ai) Online.sendDied(ship.lastAttacker, ship.id); return; }
+    if (this.objMode) { this.objSunk(ship); return; }
     if (ship.team === 'e' && !this.skirmish) {
       const gain = Math.round(ship.cost * 0.3);
       this.kills++; this.runCoins += gain; Meta.coins += gain; Meta.save();
@@ -1193,6 +1303,8 @@ const Battle = {
     i.fireTorp = this.mouse.right || k.has('Space');
     i.fireMissile = i.fireTorp;
     i.fireAux = k.has('KeyF');
+    i.fireBallistic = k.has('KeyB') || Touch.ball;
+    if (this.strikePt) { i.strike = true; i.strikeX = this.strikePt.x; i.strikeY = this.strikePt.y; } else i.strike = false;
     if (Touch.enabled && !Touch.root.classList.contains('hidden')) Touch.apply(p, i, this);
   },
 
@@ -1220,17 +1332,25 @@ const Battle = {
     s.ai = { t: 0, torpGate: rand(4, 7) * d.gate, missGate: rand(3, 6) * d.gate, mineGate: undefined, gate: d.gate,
       orbit: Math.random() < 0.5 ? 1 : -1, err: 0, errAng: 0, aimCell: null, last: null,
       inacc: d.inacc != null ? d.inacc : clamp(0.17 - w * 0.008, 0.05, 0.17),
-      pref: (s.maxRange ? s.maxRange * 0.62 : s.mgRange ? s.mgRange * 0.6 : 90) + rand(-40, 40) };
+      pref: (s.maxRange ? s.maxRange * 0.62 : s.mgRange ? s.mgRange * 0.6 : s.missRange ? s.missRange * 0.45 : 90) + rand(-40, 40) };
     s.reloadMul = d.reload != null ? d.reload : clamp(1.5 - w * 0.05, 1, 1.5);
     return s;
   },
 
   aiThink(s, dt) {
+    if (s.cargo) return this.cargoThink(s, dt);
     const a = s.ai, inp = s.input;
     const tg = this.pickTarget(s);
-    inp.fireMain = inp.fireTorp = inp.fireMissile = inp.fireAux = false;
+    inp.fireMain = inp.fireTorp = inp.fireMissile = inp.fireAux = inp.fireBallistic = false;
     if (tg) { a.last = { x: tg.x, y: tg.y }; this.teamLast[s.team] = a.last; }
     if (!tg) {                                                           // sem alvo à vista: vai ao último ponto conhecido da equipe e procura
+      const og = this.objMode ? this.objGoal(s) : null;                  // modos com objetivo: vai à zona / segue ou caça o cargueiro
+      if (og) {
+        const dd = Math.hypot(og.x - s.x, og.y - s.y);
+        inp.steer = clamp(angDiff(this.avoidIslands(s, Math.atan2(og.x - s.x, -(og.y - s.y))), s.ang) * 2, -1, 1);
+        inp.throttle = s.stats.maxSpeed ? (dd < og.hold ? 0.12 : 0.75) : 0;
+        return;
+      }
       const L = a.last || this.teamLast[s.team];
       if (!L) { inp.throttle = 0.2; inp.steer = Math.sin(this.time * 0.3) * 0.4; return; }
       const ldx = L.x - s.x, ldy = L.y - s.y;
@@ -1238,7 +1358,7 @@ const Battle = {
         const lim = HALF - 300, nl = { x: clamp(L.x + rand(-800, 800), -lim, lim), y: clamp(L.y + rand(-800, 800), -lim, lim) };
         a.last = nl; this.teamLast[s.team] = nl;
       }
-      inp.steer = clamp(angDiff(Math.atan2(ldx, -ldy), s.ang) * 2, -1, 1);
+      inp.steer = clamp(angDiff(this.avoidIslands(s, Math.atan2(ldx, -ldy)), s.ang) * 2, -1, 1);
       inp.throttle = s.stats.maxSpeed ? 0.75 : 0;
       return;
     }
@@ -1257,6 +1377,7 @@ const Battle = {
     else if (dist > a.pref + 80) heading = toT;
     else if (dist < a.pref - 80) heading = toT + a.orbit * 2.3;
     else heading = toT + a.orbit * Math.PI / 2;
+    heading = this.avoidIslands(s, heading);
     const diff = angDiff(heading, s.ang);
     inp.steer = clamp(diff * 2.2, -1, 1);
     inp.throttle = s.stats.maxSpeed ? (Math.abs(diff) > 1.4 ? 0.35 : 1) : 0;
@@ -1279,10 +1400,31 @@ const Battle = {
         && s.list.some(c => c.top && PARTS[c.top.type].kind === 'torp' && c.top.cd <= 0)) {
       inp.fireTorp = true; a.torpGate = rand(4.5, 6.5) * a.gate;
     }
-    if (s.stats.missiles && a.missGate <= 0 && dist < 780 && dist > 150
+    if (s.stats.missiles && a.missGate <= 0 && dist < Math.min(s.missRange || 780, 1500) && dist > 150
         && s.list.some(c => c.top && PARTS[c.top.type].kind === 'missile' && c.top.cd <= 0)) {
       inp.fireMissile = true; a.missGate = rand(3, 5) * a.gate;
     }
+    if (s.stats.ballistics) {                                               // míssil balístico: marca a posição do alvo
+      a.ballGate = (a.ballGate === undefined ? rand(6, 12) : a.ballGate) - dt;
+      if (a.ballGate <= 0 && dist > 450 && s.list.some(c => c.top && PARTS[c.top.type].kind === 'ballistic' && c.top.cd <= 0)) {
+        const T = Math.min(dist, 3400) / 420;
+        inp.strike = true; inp.strikeX = tg.x + (tg.vx || 0) * T * 0.8; inp.strikeY = tg.y + (tg.vy || 0) * T * 0.8;
+        inp.fireBallistic = true; a.ballGate = rand(8, 14) * a.gate;
+      }
+    }
+  },
+
+  /** desvia de ilhas: soma uma repulsão ao rumo desejado */
+  avoidIslands(s, heading) {
+    if (!this.islands.length) return heading;
+    let rx = 0, ry = 0;
+    for (const isl of this.islands) {
+      const dx = s.x - isl.x, dy = s.y - isl.y, d = Math.hypot(dx, dy) || 1, R = isl.r + s.radius + 190;
+      if (d < R) { const w = (1 - d / R); rx += dx / d * w; ry += dy / d * w; }
+    }
+    if (!rx && !ry) return heading;
+    const mx = Math.sin(heading) + rx * 2.4, my = -Math.cos(heading) + ry * 2.4;
+    return Math.atan2(mx, -my);
   },
 
   update(dt) {
@@ -1294,6 +1436,9 @@ const Battle = {
 
     this.meleeStep(dt);
     this.updateDrones(dt);
+    this.updateFlares(dt);
+    this.islandStep(dt);
+    this.mapFx(dt);
 
     /* colisão entre navios (círculos) */
     for (let i = 0; i < this.ships.length; i++) for (let j = i + 1; j < this.ships.length; j++) {
@@ -1303,7 +1448,8 @@ const Battle = {
       const r = (a.radius + b.radius) * (melee ? 0.42 : 0.6), dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy);   // com armas de contato os cascos podem se encostar
       if (d < r && d > 0.01) {
         const nx = dx / d, ny = dy / d, push = (r - d) / 2;
-        const wa = a.remote ? 0 : (b.remote ? 2 : 1), wb = b.remote ? 0 : (a.remote ? 2 : 1);   // o remoto não é empurrado: o dono resolve
+        const mt = Math.max(1, a.stats.mass + b.stats.mass), fa = clamp(2 * b.stats.mass / mt, 0.3, 1.7), fb = clamp(2 * a.stats.mass / mt, 0.3, 1.7);      // o mais pesado é empurrado menos
+        const wa = (a.remote ? 0 : (b.remote ? 2 : 1)) * fa, wb = (b.remote ? 0 : (a.remote ? 2 : 1)) * fb;   // o remoto não é empurrado: o dono resolve
         a.x -= nx * push * wa; a.y -= ny * push * wa; b.x += nx * push * wb; b.y += ny * push * wb;
         const rv = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
         if (rv < 0) {
@@ -1321,6 +1467,16 @@ const Battle = {
         const k = clamp(1 - p.life / p.T, 0, 1);
         p.x = p.x0 + (p.tx - p.x0) * k; p.y = p.y0 + (p.ty - p.y0) * k;
         if (p.life <= 0) { p.dead = true; this.blast(p.tx, p.ty, p.splash, p.dmg, p.team, p.owner, 'mortar'); this.splash(p.tx, p.ty, 1.2); }
+        continue;
+      }
+      if (p.kind === 'ballistic') {                       // míssil balístico: arco altíssimo, nada o intercepta
+        const k = clamp(1 - p.life / p.T, 0, 1);
+        p.x = p.x0 + (p.tx - p.x0) * k; p.y = p.y0 + (p.ty - p.y0) * k;
+        if (Math.random() < dt * 40) this.addP({ t: 'smoke', x: p.x, y: p.y, life: 0.9, s: 3 + 5 * k, g: 8, a: 0.5 });
+        if (p.life <= 0) {
+          p.dead = true; this.blast(p.tx, p.ty, p.splash, p.dmg, p.team, p.owner, 'ballistic'); this.splash(p.tx, p.ty, 2.4);
+          this.shake = Math.min(1, this.shake + 0.5 * clamp(1 - Math.hypot(p.tx - this.player.x, p.ty - this.player.y) / 1400, 0, 1) + 0.05);
+        }
         continue;
       }
       if (p.kind === 'depth') {                           // carga de profundidade: voa em arco, afunda e explode no fundo
@@ -1351,7 +1507,10 @@ const Battle = {
         }
         continue;
       }
-      if (p.kind === 'missile' || (p.kind === 'torp' && p.turn)) this.steerMissile(p, dt);
+      if (p.kind === 'missile' || (p.kind === 'torp' && p.turn)) {
+        this.steerMissile(p, dt);
+        if (p.target && p.target.flare && Math.hypot(p.target.x - p.x, p.target.y - p.y) < 16) { p.dead = true; this.explosion(p.x, p.y, 0.4); continue; }   // enganado por um flare
+      }
       if (p.kind === 'bullet' || p.kind === 'heavy') {                    // metralhadoras derrubam drones
         for (const dr of this.drones) {
           if (dr.dead || dr.team === p.team || Math.hypot(dr.x - p.x, dr.y - p.y) > 12) continue;
@@ -1364,6 +1523,7 @@ const Battle = {
       const steps = Math.max(1, Math.ceil(Math.hypot(p.vx, p.vy) * dt / 8));
       for (let i = 0; i < steps && !p.dead; i++) {
         p.x += p.vx * dt / steps; p.y += p.vy * dt / steps;
+        if (this.islands.length && LAND_BLOCK.has(p.kind) && this.hitLand(p)) break;
         for (const s of this.ships) {
           if (this.sameTeam(s, p.team, p.owner) || s.sinking || (s.remote && s.seenT <= 0)) continue;
           if (s.depth > DEEP && p.kind !== 'torp') continue;          // submerso: só torpedos o alcançam
@@ -1403,6 +1563,8 @@ const Battle = {
     if (this.mode === 'online') {
       alive = this.ships.filter(s => s.team !== this.player.team && !s.dead && s.seenT > 0).length;
       this.onlineTick(dt);
+    } else if (this.objMode) {
+      alive = this.objUpdate(dt);
     } else {
       const foes = this.ships.filter(s => s.team === 'e' && !s.sinking);
       alive = foes.length;
@@ -1435,22 +1597,38 @@ const Battle = {
 
   /* ------------------------------------------------------------------ drones */
   launchDrone(ship, c) {
-    const P = PARTS[c.top.type], [wx, wy] = ship.cellWorld(c);
-    const d = { drone: true, owner: ship, ownerId: ship.id, team: ship.team, kind: P.drone, P, hangar: c.top, x: wx, y: wy, ang: ship.ang, hp: P.dhp, fuel: P.fuel,
-      bombT: 1.2, home: false, dead: false, vision: P.vision, sonar: 0, ping: false, pingR: 0, sig: 1, reveal: false, revealR: 0, sub: false, quiet: 1, remote: false, orbit: rand(0, TAU) };
-    this.drones.push(d);
+    const P = PARTS[c.top.type], [wx, wy] = ship.cellWorld(c), n = P.count || 1, out = [];
+    for (let i = 0; i < n; i++) {
+      const d = { drone: true, owner: ship, ownerId: ship.id, team: ship.team, kind: P.drone, P, hangar: c.top, x: wx + rand(-5, 5), y: wy + rand(-5, 5), ang: ship.ang + (n > 1 ? (i - (n - 1) / 2) * 0.5 : 0),
+        hp: P.dhp, fuel: P.fuel, bombT: 1.2, gunT: 0, fired: false, home: false, dead: false, vision: P.vision, sonar: 0, ping: false, pingR: 0, sig: 1, reveal: false, revealR: 0,
+        sub: false, quiet: 1, remote: false, orbit: rand(0, TAU), vx: 0, vy: 0, radius: P.drone === 'swarm' ? 6 : 9 };
+      this.drones.push(d); out.push(d);
+    }
     this.addP({ t: 'ring', x: wx, y: wy, life: 0.4, s: 4, g: 60, layer: 0 });
-    return d;
+    return out;
   },
   killDrone(d, why) {
     if (d.dead) return;
     d.dead = true;
-    if (d.hangar) { d.hangar.drone = null; d.hangar.dcd = why === 'land' ? 4 : d.P.relaunch; }
-    if (why !== 'land') { this.explosion(d.x, d.y, why === 'boom' ? 0.8 : 0.5); }
+    const h = d.hangar;
+    if (h && h.drones && !h.drones.some(o => !o.dead)) { h.drone = null; h.dcd = why === 'land' ? 4 : d.P.relaunch; }     // todos fora: o hangar recarrega
+    if (why !== 'land') this.explosion(d.x, d.y, why === 'boom' ? 0.8 : d.kind === 'swarm' ? 0.35 : 0.5);
+  },
+  /** drone inimigo detectado mais próximo (para metralhadoras e drones escolta) */
+  nearestEnemyDrone(ship, x, y, range) {
+    let best = null, bd = range;
+    for (const d of this.drones) {
+      if (d.dead || d.team === ship.team) continue;
+      const dist = Math.hypot(d.x - x, d.y - y);
+      if (dist >= bd || !this.teamSees(ship.team, d)) continue;
+      bd = dist; best = d;
+    }
+    return best;
   },
   /** inimigo detectado mais próximo (do cursor, para o jogador) dentro do alcance do drone */
   droneTarget(d) {
-    const o = d.owner, ref = o.ai ? [o.x, o.y] : [o.input.aimX, o.input.aimY], range = d.kind === 'kamikaze' ? 1100 : 800;
+    const o = d.owner, ref = o.ai ? [o.x, o.y] : [o.input.aimX, o.input.aimY];
+    const range = (d.kind === 'kamikaze' || d.kind === 'swarm') ? 1100 : d.kind === 'torpedo' ? 900 : 800;
     let best = null, bd = 1e9;
     for (const s of this.ships) {
       if (s.team === d.team || s.sinking || s.dead || !this.canTarget(o, s)) continue;
@@ -1463,38 +1641,58 @@ const Battle = {
   updateDrones(dt) {
     for (const d of this.drones) {
       if (d.dead || d.remote) continue;
-      const o = d.owner;
+      const o = d.owner, K = d.kind, suicide = K === 'kamikaze' || K === 'swarm';
       if (!o || o.sinking || o.dead || o.depth > 0.3 || !this.ships.includes(o)) { this.killDrone(d, 'crash'); continue; }
       d.fuel -= dt;
-      if (d.fuel <= 0 && d.kind === 'kamikaze') { this.killDrone(d, 'boom'); continue; }       // sem combustível: cai
-      let gx, gy, tg = null;
-      if (d.fuel < 6 && d.kind !== 'kamikaze') d.home = true;
+      if (d.fuel <= 0 && suicide) { this.killDrone(d, 'boom'); continue; }       // sem combustível: cai
+      if (d.fuel < 6 && !suicide) d.home = true;
+      let gx, gy, tg = null, prey = null;
       if (d.home) { gx = o.x; gy = o.y; if (Math.hypot(o.x - d.x, o.y - d.y) < 70) { this.killDrone(d, 'land'); continue; } }
-      else if (d.kind === 'recon') {
+      else if (K === 'recon' || K === 'aew' || K === 'escort') {
+        const leash = K === 'aew' ? 900 : K === 'escort' ? 600 : 800;
         const ref = o.ai ? [o.x + Math.sin(o.ang) * 420, o.y - Math.cos(o.ang) * 420] : [o.input.aimX, o.input.aimY];
-        const dx = ref[0] - o.x, dy = ref[1] - o.y, dl = Math.hypot(dx, dy) || 1, k = Math.min(1, 800 / dl);       // coleira de 800 do navio
+        const dx = ref[0] - o.x, dy = ref[1] - o.y, dl = Math.hypot(dx, dy) || 1, k = Math.min(1, leash / dl);       // coleira do navio
         gx = o.x + dx * k; gy = o.y + dy * k;
+        if (K === 'escort') { prey = this.nearestEnemyDrone(o, d.x, d.y, 520); if (prey) { gx = prey.x; gy = prey.y; } }
       } else {
         tg = this.droneTarget(d);
         if (tg) { gx = tg.x; gy = tg.y; } else { d.orbit += dt * 0.8; gx = o.x + Math.cos(d.orbit) * 140; gy = o.y + Math.sin(d.orbit) * 140; }
       }
       const dist = Math.hypot(gx - d.x, gy - d.y);
       let want = Math.atan2(gx - d.x, -(gy - d.y));
-      if (!d.home && dist < 80 && d.kind !== 'kamikaze') want += Math.PI / 2 * (dist < 50 ? 1 : 0.5);                // circula em volta do ponto
+      if (!d.home && dist < 80 && !suicide && !prey) want += Math.PI / 2 * (dist < 50 ? 1 : 0.5);                // circula em volta do ponto
       d.ang = turnToward(d.ang, want, 3.4 * dt);
       const sp = d.P.speed;
       d.vx = Math.sin(d.ang) * sp; d.vy = -Math.cos(d.ang) * sp;
       d.x = clamp(d.x + d.vx * dt, -HALF, HALF); d.y = clamp(d.y + d.vy * dt, -HALF, HALF);
-      if (tg && d.kind === 'attack') {                                                  // bombardeio
+      if (tg && (K === 'attack' || K === 'bomber')) {                                    // bombardeio
         d.bombT -= dt;
         if (d.bombT <= 0 && Math.hypot(tg.x - d.x, tg.y - d.y) < tg.radius * 0.7) {
           d.bombT = d.P.bomb.every;
           this.shoot({ kind: 'mortar', x: d.x, y: d.y, x0: d.x, y0: d.y, tx: d.x + rand(-6, 6), ty: d.y + rand(-6, 6), T: 0.45, life: 0.45, dmg: d.P.bomb.dmg, splash: d.P.bomb.splash, team: d.team, owner: d.ownerId });
         }
       }
-      if (tg && d.kind === 'kamikaze' && (tg.cellAt(d.x, d.y) || Math.hypot(tg.x - d.x, tg.y - d.y) < 14)) {
+      if (tg && suicide && (tg.cellAt(d.x, d.y) || Math.hypot(tg.x - d.x, tg.y - d.y) < 14)) {
         this.shoot({ kind: 'mortar', x: d.x, y: d.y, x0: d.x, y0: d.y, tx: d.x, ty: d.y, T: 0.05, life: 0.05, dmg: d.P.boom.dmg, splash: d.P.boom.splash, team: d.team, owner: d.ownerId });
         this.killDrone(d, 'boom');
+        continue;
+      }
+      if (K === 'torpedo' && tg && !d.fired && !d.home && Math.hypot(tg.x - d.x, tg.y - d.y) < 380 && Math.abs(angDiff(Math.atan2(tg.x - d.x, -(tg.y - d.y)), d.ang)) < 0.5) {
+        const T = d.P.torp, [ax, ay] = dirOf(d.ang);
+        this.shoot({ kind: 'torp', x: d.x + ax * 12, y: d.y + ay * 12, vx: ax * T.speed, vy: ay * T.speed, ang: d.ang, speed: T.speed, life: 560 / T.speed, dmg: T.dmg, team: d.team, owner: d.ownerId, splash: T.splash, turn: T.turn, target: tg });
+        d.fired = true; d.home = true; SFX.play('torp', d.x, d.y);
+      }
+      if (K === 'escort') {                                                              // metralhadora do drone
+        d.gunT -= dt;
+        const gun = d.P.gun, gt = (prey && Math.hypot(prey.x - d.x, prey.y - d.y) < gun.range + 20) ? prey : this.nearestEnemy(o, d.x, d.y, gun.range);
+        if (gt && d.gunT <= 0) {
+          const aim = Math.atan2(gt.x + (gt.vx || 0) * 0.15 - d.x, -(gt.y + (gt.vy || 0) * 0.15 - d.y));
+          if (Math.abs(angDiff(aim, d.ang)) < 0.5) {
+            d.gunT = gun.reload; const a = aim + rand(-0.06, 0.06), [ax, ay] = dirOf(a);
+            this.shoot({ kind: 'bullet', x: d.x + ax * 10, y: d.y + ay * 10, vx: ax * 620 + d.vx * 0.3, vy: ay * 620 + d.vy * 0.3, life: 0.4, dmg: gun.dmg, team: d.team, owner: d.ownerId });
+            SFX.play('mg', d.x, d.y);
+          }
+        }
       }
     }
     this.drones = this.drones.filter(d => !d.dead);
@@ -1503,22 +1701,172 @@ const Battle = {
   syncRemoteDrones(ship, arr) {
     this.drones = this.drones.filter(d => !(d.remote && d.ownerId === ship.id));
     for (const a of arr) this.drones.push({ drone: true, remote: true, ownerId: ship.id, owner: ship, team: ship.team, kind: a[3], x: a[0], y: a[1], ang: a[2], hp: a[4],
-      dead: false, vision: a[5] || 0, sonar: 0, ping: false, pingR: 0, sig: 1, reveal: false, revealR: 0, sub: false, quiet: 1 });
+      dead: false, vision: a[5] || 0, sonar: 0, ping: false, pingR: 0, sig: 1, reveal: false, revealR: 0, sub: false, quiet: 1, vx: Math.sin(a[2]) * 200, vy: -Math.cos(a[2]) * 200, radius: 9 });
   },
   drawDrone(d) {
-    const ctx = this.ctx, col = d.kind === 'recon' ? '#7fd4ff' : d.kind === 'attack' ? '#ff6a5c' : '#ffb347';
+    const ctx = this.ctx, K = d.kind;
+    const col = { recon: '#7fd4ff', attack: '#ff6a5c', kamikaze: '#ffb347', escort: '#7bd86a', bomber: '#ff6a5c', torpedo: '#4cc9ff', swarm: '#ffb347', aew: '#c18bff' }[K] || '#fff';
+    const sz = K === 'bomber' ? 1.35 : K === 'swarm' ? 0.6 : K === 'aew' ? 1.2 : 1;
     const body = k => {
       poly(ctx, [[0, -11 * k], [3 * k, -3 * k], [3 * k, 8 * k], [0, 11 * k], [-3 * k, 8 * k], [-3 * k, -3 * k]]); ctx.fill();
       ctx.fillRect(-12 * k, -2 * k, 24 * k, 4 * k); ctx.fillRect(-5 * k, 7 * k, 10 * k, 2.5 * k);
     };
-    ctx.save(); ctx.translate(d.x + 10, d.y + 14); ctx.rotate(d.ang); ctx.fillStyle = 'rgba(0,0,0,.22)'; body(0.9); ctx.restore();
-    ctx.save(); ctx.translate(d.x, d.y); ctx.rotate(d.ang);
+    ctx.save(); ctx.translate(d.x + 10, d.y + 14); ctx.rotate(d.ang); ctx.fillStyle = 'rgba(0,0,0,.22)'; body(0.9 * sz); ctx.restore();
+    ctx.save(); ctx.translate(d.x, d.y); ctx.rotate(d.ang); ctx.scale(sz, sz);
     ctx.fillStyle = '#e8edf2'; body(1);
     ctx.fillStyle = col; ctx.beginPath(); ctx.arc(0, -6, 3, 0, TAU); ctx.fill();
-    if (d.kind === 'recon') { ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(0, 2, 3, 0, TAU); ctx.stroke(); }
-    if (d.kind === 'attack') { ctx.fillStyle = '#3a3f46'; ctx.beginPath(); ctx.arc(-7, 2, 2.4, 0, TAU); ctx.arc(7, 2, 2.4, 0, TAU); ctx.fill(); }
+    if (K === 'recon' || K === 'aew') { ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(0, 2, K === 'aew' ? 5 : 3, 0, TAU); ctx.stroke(); }
+    if (K === 'attack' || K === 'bomber') { ctx.fillStyle = '#3a3f46'; ctx.beginPath(); ctx.arc(-7, 2, 2.4, 0, TAU); ctx.arc(7, 2, 2.4, 0, TAU); ctx.fill(); }
+    if (K === 'escort') { ctx.fillStyle = '#2c3541'; ctx.fillRect(-1, -14, 2, 7); }
+    if (K === 'torpedo') { ctx.fillStyle = '#d0d8e0'; ctx.fillRect(-1.5, 3, 3, 10); }
     ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 1.5; ctx.beginPath(); const pa = this.time * 40; ctx.moveTo(Math.cos(pa) * 6, -11 + Math.sin(pa) * 1.5); ctx.lineTo(-Math.cos(pa) * 6, -11 - Math.sin(pa) * 1.5); ctx.stroke();
     ctx.restore();
+  },
+
+  /* ------------------------------------------------------------------ modos com objetivo (offline) */
+  /** Controle de Zona e Comboio contra bots, com aliados */
+  startObjective(sk) {
+    sk = sk || {};
+    const mode = this.objMode, map = this.map, pl = this.player, diff = sk.diff || Meta.bots.diff, avoid = [[pl.x, pl.y]];
+    this.mission = { type: mode, t: 0, limit: 480, scoreLimit: 200, lives: 3, over: false, maxProg: 0, cargoT: 0, len: mode === 'convoy' ? routeLength(map.route) : 0 };
+    this.zoneState = { z: [], score: { p: 0, e: 0 } };
+    this.wave = 0; this.teamLast = {};
+    const pool = this.botPool().filter(p => p.id !== 'meu');
+    const pick = (lo, hi) => { const o = pool.filter(p => p.power >= lo && p.power <= hi), l = o.length ? o : pool; return l[(Math.random() * l.length) | 0]; };
+    const addBot = (p, team, side, label, id) => {
+      const sp = pickSpawn(map, side, Math.random, avoid); avoid.push([sp.x, sp.y]);
+      const b = this.makeBot(p.design, team, sp.x, sp.y, sp.a, label, diff, id);
+      b.preset = p; b.diffKey = diff; b.side = side; this.ships.push(b); return b;
+    };
+    const nAl = sk.allies == null ? 2 : sk.allies;
+    for (let i = 0; i < nAl; i++) { const p = pick(2, 6); addBot(p, 'p', 'A', 'Aliado · ' + p.name, 'al' + i); }
+    const list = [];
+    for (const id in (sk.counts || {})) { const p = pool.find(q => q.id === id); for (let i = 0; i < sk.counts[id]; i++) if (p) list.push(p); }
+    const nEn = list.length || (3 + nAl);
+    for (let i = 0; i < nEn; i++) { const p = list[i] || pick(2, 6); addBot(p, 'e', 'B', p.name, 'ai' + i); }
+    if (mode === 'convoy') {
+      const r = map.route, a = Math.atan2(r[1][0] - r[0][0], -(r[1][1] - r[0][1]));
+      const c = this.makeBot(CARGO_DESIGN, 'p', r[0][0] + 90, r[0][1], a, 'Cargueiro', 'normal', 'cargo');
+      c.cargo = true; this.ships.push(c);
+    }
+    UI.banner(mode === 'zone' ? 'CONTROLE DE ZONA' : 'COMBOIO', mode === 'zone' ? 'Segure as zonas · primeiro a ' + this.mission.scoreLimit + ' pontos' : 'Escolte o cargueiro até o fim · ' + this.mission.lives + ' vidas');
+  },
+  objSunk(ship) {
+    const m = this.mission;
+    if (!m || m.over) return;
+    if (ship === this.player) { this.respawnQ.push({ t: 8, kind: 'player' }); UI.banner('AFUNDADO', 'Reaparecendo em 8 s…'); }
+    else if (ship.cargo) {
+      m.lives--;
+      if (m.lives <= 0) return this.objEnd(false, 'O cargueiro foi destruído', 'Acabaram as vidas do cargueiro.');
+      this.respawnQ.push({ t: 10, kind: 'cargo' }); UI.banner('CARGUEIRO PERDIDO', m.lives + ' vida(s) restante(s) · renasce em 10 s');
+    } else if (ship.ai) {
+      this.respawnQ.push({ t: 12, kind: 'bot', preset: ship.preset, team: ship.team, side: ship.side, label: ship.label, diff: ship.diffKey, id: ship.id });
+      if (ship.team === 'e') this.kills++;
+    }
+  },
+  objRespawn(q) {
+    const live = () => this.ships.filter(s => !s.dead && !s.sinking).map(s => [s.x, s.y]);
+    if (q.kind === 'player') { const sp = pickSpawn(this.map, 'A', Math.random, live()); this.respawnMe(sp.x, sp.y, sp.a); UI.banner('DE VOLTA!', ''); }
+    else if (q.kind === 'bot') {
+      const sp = pickSpawn(this.map, q.side, Math.random, live());
+      this.ships = this.ships.filter(s => s.id !== q.id);
+      const b = this.makeBot(q.preset.design, q.team, sp.x, sp.y, sp.a, q.label, q.diff, q.id);
+      b.preset = q.preset; b.diffKey = q.diff; b.side = q.side; this.ships.push(b);
+    } else if (q.kind === 'cargo') {
+      const m = this.mission, step = m.len / 5, cp = Math.floor(m.maxProg / step) * step;
+      const p1 = routePoint(this.map.route, Math.max(0, cp)), p2 = routePoint(this.map.route, Math.min(m.len, cp + 80));
+      this.ships = this.ships.filter(s => !s.cargo);
+      const c = this.makeBot(CARGO_DESIGN, 'p', p1[0], p1[1], Math.atan2(p2[0] - p1[0], -(p2[1] - p1[1])), 'Cargueiro', 'normal', 'cargo');
+      c.cargo = true; this.ships.push(c); UI.banner('CARGUEIRO DE VOLTA', 'Renasceu no último ponto de controle');
+    }
+  },
+  objUpdate(dt) {
+    const m = this.mission;
+    let alive = 0;
+    for (const s of this.ships) if (s.team === 'e' && !s.sinking && !s.dead) alive++;
+    if (!m || m.over) return alive;
+    m.t += dt;
+    for (const q of this.respawnQ) q.t -= dt;
+    if (this.respawnQ.some(q => q.t <= 0)) { const due = this.respawnQ.filter(q => q.t <= 0); this.respawnQ = this.respawnQ.filter(q => q.t > 0); for (const q of due) this.objRespawn(q); }
+    const live = this.ships.filter(s => !s.sinking && !s.dead);
+    if (m.type === 'zone') {
+      zoneStep(this.zoneState, this.map.zones, live, dt, ['p', 'e']);
+      const sc = this.zoneState.score;
+      if ((sc.p || 0) >= m.scoreLimit) this.objEnd(true, 'Sua equipe dominou as zonas!', 'Pontos: ' + Math.floor(sc.p) + ' × ' + Math.floor(sc.e || 0));
+      else if ((sc.e || 0) >= m.scoreLimit) this.objEnd(false, 'Os inimigos dominaram as zonas', 'Pontos: ' + Math.floor(sc.p || 0) + ' × ' + Math.floor(sc.e));
+    } else {
+      const cargo = this.ships.find(s => s.cargo && !s.sinking && !s.dead);
+      if (cargo) {
+        const pr = routeProject(this.map.route, cargo.x, cargo.y);
+        m.cargoT = pr.t; m.maxProg = Math.max(m.maxProg, pr.t);
+        if (pr.t > m.len - 150) this.objEnd(true, 'O comboio chegou ao destino!', 'Vidas restantes do cargueiro: ' + m.lives);
+      }
+    }
+    if (!m.over && m.t >= m.limit) {
+      if (m.type === 'zone') { const sc = this.zoneState.score, w = (sc.p || 0) > (sc.e || 0); this.objEnd(w, w ? 'Tempo esgotado: sua equipe lidera!' : 'Tempo esgotado: os inimigos lideram', 'Pontos: ' + Math.floor(sc.p || 0) + ' × ' + Math.floor(sc.e || 0)); }
+      else this.objEnd(false, 'Tempo esgotado', 'O cargueiro não chegou a tempo.');
+    }
+    return alive;
+  },
+  objEnd(win, title, sub) {
+    const m = this.mission;
+    if (!m || m.over) return;
+    m.over = true; this.state = win ? 'cleared' : 'over';
+    UI.overlay({
+      title: win ? 'Vitória! ⚓' : 'Derrota 💀',
+      html: `<p><b>${title}</b><br>${sub || ''}</p><p class="muted">Bots afundados: <b>${this.kills}</b> · Partida contra bots não rende moedas.</p>`,
+      buttons: [
+        { label: 'Jogar de novo', primary: true, onClick: () => { UI.hideOverlay(); Touch.show(true); Battle.start(Battle.design, 1, Battle.skirmish); } },
+        { label: 'Voltar ao estaleiro', onClick: () => UI.toYard() },
+      ],
+    });
+  },
+  /** estados das zonas (offline: calculados aqui; online: enviados pelo anfitrião) */
+  zoneStates() { return (this.mode === 'online' ? (this.objState && this.objState.z) : (this.zoneState && this.zoneState.z)) || []; },
+  /** destino de um bot sem alvo no modo com objetivo: { x, y, hold } */
+  objGoal(s) {
+    if (!this.map) return null;
+    if (this.map.zones.length) {
+      const zs = this.zoneStates();
+      let best = null, bd = 1e9;
+      this.map.zones.forEach((z, i) => {
+        const st = zs[i] || { owner: '' }, d = Math.hypot(z.x - s.x, z.y - s.y) + (st.owner === s.team ? 900 : 0);      // prefere zonas que ainda não são do time
+        if (d < bd) { bd = d; best = z; }
+      });
+      return best ? { x: best.x, y: best.y, hold: best.r * 0.5 } : null;
+    }
+    const cargo = this.ships.find(o => o.cargo && !o.sinking && !o.dead);
+    if (!cargo) return null;
+    if (cargo.team === s.team) return { x: cargo.x, y: cargo.y, hold: 240 };
+    const route = this.map.route, pr = routeProject(route, cargo.x, cargo.y), pt = routePoint(route, Math.min(routeLength(route), pr.t + 500));       // atacantes esperam à frente do cargueiro
+    return { x: pt[0], y: pt[1], hold: 120 };
+  },
+  /** o cargueiro anda pela rota enquanto houver escolta por perto */
+  cargoThink(s, dt) {
+    const inp = s.input, route = this.map && this.map.route;
+    inp.fireMain = inp.fireTorp = inp.fireMissile = inp.fireAux = inp.fireBallistic = false;
+    if (!route || route.length < 2) { inp.throttle = 0; inp.steer = 0; return; }
+    const L = routeLength(route), pr = routeProject(route, s.x, s.y), tgt = routePoint(route, Math.min(L, pr.t + 240));
+    const escort = this.ships.some(o => o !== s && o.team === s.team && !o.sinking && !o.dead && Math.hypot(o.x - s.x, o.y - s.y) < 560);
+    const end = pr.t > L - 150;
+    const diff = angDiff(Math.atan2(tgt[0] - s.x, -(tgt[1] - s.y)), s.ang);
+    inp.steer = clamp(diff * 2, -1, 1);
+    s.cargoWait = !escort && !end;
+    inp.throttle = (escort && !end) ? (Math.abs(diff) > 0.9 ? 0.12 : 0.4) : 0;
+  },
+  /** texto do objetivo no HUD */
+  hudObj() {
+    const el = document.getElementById('hud-obj');
+    if (!el) return;
+    let txt = '';
+    if (this.mode === 'online') txt = Online.objText();
+    else if (this.mission) {
+      const m = this.mission;
+      if (m.type === 'zone') { const sc = this.zoneState.score; txt = '🏁 Zonas · você ' + Math.floor(sc.p || 0) + ' × ' + Math.floor(sc.e || 0) + ' inimigo · meta ' + m.scoreLimit; }
+      else { const pct = m.len ? Math.round(clamp((m.cargoT || 0) / m.len, 0, 1) * 100) : 0; txt = '🚢 Comboio ' + pct + '% · ❤ ' + m.lives; }
+      const left = Math.max(0, Math.round(m.limit - m.t)); txt += ' · ⏱ ' + Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0');
+    }
+    if (txt !== this.objTxt) { this.objTxt = txt; el.textContent = txt; }
   },
 
   /** armas de corpo a corpo: espinhos, serras, aríete, ganchos e choque (cada cliente aplica o dano só no seu navio) */
@@ -1622,14 +1970,119 @@ const Battle = {
   },
 
   steerMissile(p, dt) {
+    const lock = p.lock || 'radar';
     let tg = p.target;
-    if (tg && (tg.sinking || tg.dead)) tg = p.target = null;
-    if (tg && !p.remoteOwned && !(this.mode === 'online' ? (tg.team === this.player.team || this.visibleToMe(tg)) : this.teamSees(p.team, tg))) tg = p.target = null;
-    if (!tg && !p.jam) tg = p.target = this.nearestEnemy({ team: p.team }, p.x, p.y, 900);
+    if (tg && tg.flare) { if (tg.dead || tg.life <= 0) tg = p.target = null; }
+    else if (tg && (tg.sinking || tg.dead)) tg = p.target = null;
+    if (tg && !tg.flare && !p.remoteOwned && lock !== 'heat' && lock !== 'gps' && !(this.mode === 'online' ? (tg.team === this.player.team || this.visibleToMe(tg)) : this.teamSees(p.team, tg))) tg = p.target = null;
+    const ownerLive = p.ownerShip && !p.remoteOwned && !p.ownerShip.dead && !p.ownerShip.sinking;
+    const gpsOk = lock === 'gps' && (p.gx || p.gy);
+    if (!tg && !p.jam && !gpsOk && !(lock === 'tele' && ownerLive)) tg = p.target = this.nearestEnemy({ team: p.team }, p.x, p.y, lock === 'heat' ? 700 : 900);
+    if (lock === 'heat' && !(tg && tg.flare) && this.flares.length) {            // flares enganam o buscador de calor
+      for (const f of this.flares) {
+        if (f.team === p.team || f.dead || f.life <= 0) continue;
+        const dx = f.x - p.x, dy = f.y - p.y;
+        if (dx * dx + dy * dy > 300 * 300 || Math.abs(angDiff(Math.atan2(dx, -dy), p.ang)) > 1.3) continue;
+        const seen = p.seenFlares || (p.seenFlares = new Set());
+        if (seen.has(f)) continue;
+        seen.add(f);
+        if (Math.random() < 0.3) { tg = p.target = f; break; }
+      }
+    }
     if (p.jam > 0) { p.jam -= dt; p.ang += rand(-1, 1) * 4 * dt; }                 // bloqueado: sai voando sem rumo
-    else if (tg) p.ang = turnToward(p.ang, Math.atan2(tg.x - p.x, -(tg.y - p.y)), p.turn * dt);
+    else if (lock === 'tele' && ownerLive) {                                     // teleguiado: segue o cursor do dono
+      const o = p.ownerShip;
+      p.ang = turnToward(p.ang, Math.atan2(o.input.aimX - p.x, -(o.input.aimY - p.y)), p.turn * dt);
+    } else if (gpsOk && !(tg && tg.flare)) {                                     // GPS: vai até a coordenada, depois procura alvo por perto
+      if (!p.seek && Math.hypot(p.gx - p.x, p.gy - p.y) < 150) p.seek = true;
+      if (p.seek && !tg) tg = p.target = this.nearestEnemy({ team: p.team }, p.x, p.y, 280);
+      if (tg) p.ang = turnToward(p.ang, Math.atan2(tg.x - p.x, -(tg.y - p.y)), p.turn * dt);
+      else if (!p.seek) p.ang = turnToward(p.ang, Math.atan2(p.gx - p.x, -(p.gy - p.y)), p.turn * dt);
+    } else if (tg) {
+      let tx = tg.x, ty = tg.y;
+      if (lock === 'heat' && !tg.flare && tg.heatPoint) [tx, ty] = tg.heatPoint();      // mira no motor mais quente
+      p.ang = turnToward(p.ang, Math.atan2(tx - p.x, -(ty - p.y)), p.turn * dt);
+    }
     const [dx, dy] = dirOf(p.ang);
     p.vx = dx * p.speed; p.vy = dy * p.speed;
+  },
+
+  /* ------------------------------------------------------------------ flares, ilhas e clima */
+  addFlare(x, y, team, life, vx, vy, ang) {
+    const a = ang === undefined ? rand(0, TAU) : ang, sp = rand(140, 240), [dx, dy] = dirOf(a);      // dirOf: 0 = para cima
+    this.flares.push({ flare: true, x, y, vx: dx * sp + (vx || 0) * 0.3, vy: dy * sp + (vy || 0) * 0.3, team, life, dead: false });
+  },
+  updateFlares(dt) {
+    for (const f of this.flares) {
+      f.life -= dt;
+      const k = Math.exp(-0.9 * dt); f.vx *= k; f.vy *= k;
+      f.x += f.vx * dt; f.y += f.vy * dt;
+      if (Math.random() < dt * 30) this.addP({ t: 'fire', x: f.x, y: f.y, vx: rand(-15, 15), vy: rand(-15, 15), life: 0.4, s: rand(3, 5), g: -2 });
+      if (f.life <= 0) f.dead = true;
+    }
+    if (this.flares.some(f => f.dead)) this.flares = this.flares.filter(f => !f.dead);
+  },
+  /** um tiro direto bateu em terra? */
+  hitLand(p) {
+    for (const isl of this.islands) {
+      if (!inIsland(isl, p.x, p.y, 0)) continue;
+      p.dead = true;
+      if (p.kind === 'torp') { this.splash(p.x, p.y, 1); this.explosion(p.x, p.y, 0.5); }
+      else if (p.kind === 'missile') this.explosion(p.x, p.y, 0.7);
+      else if (this.inVision(p.x, p.y)) { this.addP({ t: 'spark', x: p.x, y: p.y, vx: rand(-80, 80), vy: rand(-80, 80), life: 0.25, drag: 3 }); if (p.kind === 'shell' || p.kind === 'rail') this.addP({ t: 'smoke', x: p.x, y: p.y, life: 0.5, s: 4, g: 8, a: 0.6 }); }
+      return true;
+    }
+    return false;
+  },
+  /** vetor que tira o ponto (x,y) do polígono da ilha (com folga pad); null se estiver livre */
+  islandPush(isl, x, y, pad) {
+    if (!inIsland(isl, x, y, pad)) return null;
+    const lx = x - isl.x, ly = y - isl.y, p = isl.pts;
+    let bd = 1e9, bx = 0, by = 0;
+    for (let i = 0, j = p.length - 1; i < p.length; j = i++) {
+      const ax = p[j][0], ay = p[j][1], ex = p[i][0] - ax, ey = p[i][1] - ay, l2 = ex * ex + ey * ey || 1;
+      const u = clamp(((lx - ax) * ex + (ly - ay) * ey) / l2, 0, 1), qx = ax + ex * u, qy = ay + ey * u, d = Math.hypot(lx - qx, ly - qy);
+      if (d < bd) { bd = d; bx = qx; by = qy; }
+    }
+    // ponto dentro do polígono: empurra até a borda + folga; fora (só dentro da folga): empurra para longe da borda
+    let inside = false;
+    for (let i = 0, j = p.length - 1; i < p.length; j = i++) {
+      const xi = p[i][0], yi = p[i][1], xj = p[j][0], yj = p[j][1];
+      if (((yi > ly) !== (yj > ly)) && (lx < (xj - xi) * (ly - yi) / (yj - yi) + xi)) inside = !inside;
+    }
+    let nx, ny, mag;
+    if (inside || Math.hypot(lx, ly) < isl.rc) { nx = bx - lx; ny = by - ly; mag = bd + pad; }
+    else { nx = lx - bx; ny = ly - by; mag = pad - bd; }
+    const n = Math.hypot(nx, ny) || 1;
+    if (mag <= 0) return null;
+    return [nx / n * mag, ny / n * mag];
+  },
+  /** navios não atravessam ilhas (terra é invencível) */
+  islandStep(dt) {
+    if (!this.islands.length) return;
+    for (const s of this.ships) {
+      if (s.remote || s.sinking || s.dead) continue;
+      for (const isl of this.islands) {
+        if (Math.hypot(s.x - isl.x, s.y - isl.y) > isl.r + s.radius + 40) continue;
+        let best = null, bm = 0;
+        for (const c of s.list) {
+          if (c.dead) continue;
+          const [wx, wy] = s.cellWorld(c), v = this.islandPush(isl, wx, wy, CS * 0.5);
+          if (v) { const m = Math.hypot(v[0], v[1]); if (m > bm) { bm = m; best = v; } }
+        }
+        if (best) {
+          s.x += best[0]; s.y += best[1];
+          const n = bm || 1, nx = best[0] / n, ny = best[1] / n, vn = s.vx * nx + s.vy * ny;
+          if (vn < 0) { s.vx -= nx * vn * 1.4; s.vy -= ny * vn * 1.4; }
+          if (s === this.player && vn < -60) this.shake = Math.min(1, this.shake + 0.1);
+        }
+      }
+    }
+  },
+  /** chuva e raios (só visual) */
+  mapFx(dt) {
+    if (this.bolt > 0) this.bolt -= dt;
+    if (this.env && this.env.rain) { this.wxT -= dt; if (this.wxT <= 0) { this.wxT = rand(5, 14); this.bolt = 0.35; } }
   },
 
   updateParticles(dt) {
@@ -1688,6 +2141,7 @@ const Battle = {
   /* ------------------------------------------------------------- HUD */
   updateHud(alive) {
     const h = this.hud, p = this.player;
+    if (this.objMode) this.hudObj();
     h.wave.textContent = this.wave; h.enemies.textContent = alive; h.coins.textContent = this.runCoins;
     const ratio = clamp(p.hullHp() / p.maxHullHp, 0, 1);
     h['hp-fill'].style.width = (ratio * 100).toFixed(0) + '%';
@@ -1721,6 +2175,10 @@ const Battle = {
     for (const c of p.crewCells) { const k = c.crew; crew[k] = crew[k] || [0, 0]; crew[k][1]++; if (!c.dead && c.crewOn !== false) crew[k][0]++; }
     const chips = Object.keys(crew).map(k => `<span class="crew-chip ${crew[k][0] ? '' : 'off'}" title="${CREW[k].name}">${CREW[k].icon}${crew[k][0]}/${crew[k][1]}</span>`).join('');
     if (chips !== this.crewHtml) { this.crewHtml = chips; h.crew.innerHTML = chips; }
+    h['row-ball'].style.display = w.ballistic === null ? 'none' : '';
+    if (w.ballistic !== null) { h['cd-ball'].style.width = (w.ballistic * 100).toFixed(0) + '%'; h['cd-ball'].style.background = this.strikePt ? '' : '#667'; }
+    const tball = document.getElementById('tbtn-ball');
+    if (tball) tball.classList.toggle('hidden', w.ballistic === null);
     h['row-mine'].style.display = w.mine === null ? 'none' : '';
     if (w.mine !== null) h['cd-mine'].style.width = (w.mine * 100).toFixed(0) + '%';
     const tb = document.getElementById('tbtn-dive'), tm = document.getElementById('tbtn-aux');
@@ -1750,16 +2208,28 @@ const Battle = {
     ctx.strokeStyle = '#ff5d4a'; ctx.lineWidth = 5; ctx.setLineDash([26, 16]);
     ctx.strokeRect(-HALF, -HALF, WORLD, WORLD); ctx.setLineDash([]);
 
+    this.drawIslands();
+    this.drawObjectives();
+    if (this.env && this.env.dark) { ctx.fillStyle = `rgba(0,6,22,${this.env.dark})`; ctx.fillRect(this.cam.x - this.W / this.zoom, this.cam.y - this.H / this.zoom, 2 * this.W / this.zoom, 2 * this.H / this.zoom); }
     this.drawParticles(0);
     const meT = this.player.team;
     const shown = p => p.team === meT || (p.kind === 'mine' ? this.nearObserver(p.x, p.y, 150) : this.inVision(p.x, p.y));   // minas inimigas só aparecem de perto
     for (const p of this.shots) if (p.kind === 'mortar' && (shown(p) || this.inVision(p.tx, p.ty))) this.drawMortarMarker(p);
+    for (const p of this.shots) if (p.kind === 'ballistic') this.drawBallMarker(p);
+    this.drawStrike();
     for (const p of this.shots) if (p.kind === 'torp' && shown(p)) this.drawShot(p);
     for (const [sh, mode] of this.contacts) if (mode === 'full' && sh !== this.player) sh.draw(ctx, this.time);
     this.player.draw(ctx, this.time);
     for (const [sh, mode] of this.contacts) if (mode === 'full') sh.drawShield(ctx);
     for (const d of this.drones) if (!d.dead && (d.team === this.player.team || (this.inVision(d.x, d.y) && (!d.remote || (d.owner && d.owner.seenT > 0))))) this.drawDrone(d);
     for (const p of this.shots) if (p.kind !== 'torp' && shown(p)) this.drawShot(p);
+    ctx.globalCompositeOperation = 'lighter';
+    for (const f of this.flares) if (this.inVision(f.x, f.y) || f.team === meT) {
+      const k = clamp(f.life / 2, 0, 1), g = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, 16);
+      g.addColorStop(0, `rgba(255,250,210,${k.toFixed(2)})`); g.addColorStop(0.4, `rgba(255,170,60,${(k * 0.7).toFixed(2)})`); g.addColorStop(1, 'rgba(255,90,0,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(f.x, f.y, 16, 0, TAU); ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
     this.drawParticles(1);
 
     // barras de vida e nomes dos inimigos visíveis
@@ -1778,6 +2248,7 @@ const Battle = {
     }
     ctx.restore();
 
+    this.drawWeather();
     this.drawFog();
     this.drawBlips();
     this.drawIndicators();
@@ -1786,21 +2257,98 @@ const Battle = {
   },
 
   drawWater() {
-    const ctx = this.ctx, W = this.W, H = this.H, cam = this.cam, t = this.time, z = this.zoom;
+    const ctx = this.ctx, W = this.W, H = this.H, cam = this.cam, t = this.time, z = this.zoom, E = this.env || BIOMES.oceano;
     const g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, '#17608c'); g.addColorStop(1, '#0d3f66');
+    g.addColorStop(0, E.water[0]); g.addColorStop(1, E.water[1]);
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
     const sp = 130, x0 = Math.floor((cam.x - W / (2 * z)) / sp) - 1, y0 = Math.floor((cam.y - H / (2 * z)) / sp) - 1;
     ctx.lineWidth = 2; ctx.lineCap = 'round';
     const hash = (a, b, n) => { const v = Math.sin(a * 127.1 + b * 311.7 + n * 74.7) * 43758.5453; return v - Math.floor(v); };
-    const nx = Math.ceil(W / (sp * z)) + 3, ny = Math.ceil(H / (sp * z)) + 3;
+    const nx = Math.ceil(W / (sp * z)) + 3, ny = Math.ceil(H / (sp * z)) + 3, wv = E.rain ? 1.8 : 1;
     for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
       const gx = x0 + i, gy = y0 + j, h1 = hash(gx, gy, 0), h2 = hash(gx, gy, 1);
       const px = (gx * sp + h1 * sp - cam.x) * z + W / 2, py = (gy * sp + h2 * sp - cam.y) * z + H / 2;
-      const al = 0.05 + 0.11 * (0.5 + 0.5 * Math.sin(t * 0.9 + h1 * 20));
-      ctx.strokeStyle = `rgba(200,235,255,${al.toFixed(3)})`;
+      const al = (0.05 + 0.11 * (0.5 + 0.5 * Math.sin(t * 0.9 * wv + h1 * 20))) * (E.rain ? 1.4 : 1);
+      ctx.strokeStyle = `rgba(${E.wave},${al.toFixed(3)})`;
       ctx.beginPath(); ctx.arc(px, py, (14 + h2 * 16) * z, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
       ctx.beginPath(); ctx.arc(px + 22 * z, py + 12 * z, (8 + h1 * 8) * z, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke();
+      if (E.ice && h1 > 0.82) {                                                  // blocos de gelo flutuando
+        ctx.fillStyle = 'rgba(235,248,255,.55)'; ctx.fillRect(px - 6 * z, py - 4 * z, (10 + h2 * 14) * z, (6 + h1 * 6) * z);
+      }
+    }
+  },
+
+  /** polígono da ilha com margens (praia, grama, centro) */
+  drawIslands() {
+    const ctx = this.ctx, E = this.env || BIOMES.oceano, z = this.zoom, t = this.time;
+    const vw = this.W / z / 2 + 400, vh = this.H / z / 2 + 400;
+    for (const isl of this.islands) {
+      if (Math.abs(isl.x - this.cam.x) > vw + isl.r || Math.abs(isl.y - this.cam.y) > vh + isl.r) continue;
+      const path = k => { ctx.beginPath(); isl.pts.forEach((p, i) => { const x = isl.x + p[0] * k, y = isl.y + p[1] * k; if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); }); ctx.closePath(); };
+      // águas rasas (pulsam devagar)
+      path(1.22); ctx.fillStyle = E.ice ? 'rgba(230,245,255,.18)' : 'rgba(150,235,230,' + (0.16 + 0.04 * Math.sin(t * 1.3 + isl.v)).toFixed(3) + ')'; ctx.fill();
+      path(1.1); ctx.fillStyle = E.ice ? 'rgba(235,248,255,.28)' : 'rgba(170,240,235,.24)'; ctx.fill();
+      path(1.0); ctx.fillStyle = E.land[0]; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.lineWidth = 2; ctx.stroke();
+      path(0.82); ctx.fillStyle = E.land[1]; ctx.fill();
+      path(0.55); ctx.fillStyle = E.land[2]; ctx.fill();
+      // detalhes (árvores/rochas/rachaduras), determinísticos pela semente da ilha
+      let sd = isl.v | 0; const rnd = () => (sd = (sd * 1664525 + 1013904223) >>> 0) / 4294967296;
+      const n = Math.round(isl.r / 9);
+      for (let i = 0; i < n; i++) {
+        const a = rnd() * TAU, rr0 = Math.sqrt(rnd()) * isl.rc * 0.9, x = isl.x + Math.cos(a) * rr0, y = isl.y + Math.sin(a) * rr0;
+        if (E.ice) { ctx.strokeStyle = 'rgba(120,170,200,.45)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + (rnd() - 0.5) * 40, y + (rnd() - 0.5) * 40); ctx.stroke(); }
+        else if (E.lava) { ctx.fillStyle = rnd() > 0.6 ? 'rgba(255,110,30,' + (0.5 + 0.3 * Math.sin(t * 2 + i)).toFixed(2) + ')' : '#1a1715'; ctx.beginPath(); ctx.arc(x, y, 3 + rnd() * 5, 0, TAU); ctx.fill(); }
+        else { ctx.fillStyle = rnd() > 0.25 ? 'rgba(20,70,30,.55)' : 'rgba(110,100,90,.8)'; ctx.beginPath(); ctx.arc(x, y, 4 + rnd() * 7, 0, TAU); ctx.fill(); }
+      }
+      if (E.lava) {                                                                  // cratera brilhante
+        const g = ctx.createRadialGradient(isl.x, isl.y, 2, isl.x, isl.y, isl.rc * 0.5);
+        g.addColorStop(0, 'rgba(255,200,80,' + (0.7 + 0.2 * Math.sin(t * 3 + isl.v)).toFixed(2) + ')'); g.addColorStop(1, 'rgba(255,60,0,0)');
+        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(isl.x, isl.y, isl.rc * 0.5, 0, TAU); ctx.fill();
+      }
+    }
+  },
+
+  /** zonas de captura e rota do comboio */
+  drawObjectives() {
+    const ctx = this.ctx, map = this.map;
+    if (!map) return;
+    const mine = this.player.team;
+    if (map.zones.length) {
+      const zs = (this.mode === 'online' ? (this.objState && this.objState.z) : (this.zoneState && this.zoneState.z)) || [];
+      const teams = this.mode === 'online' ? ['A', 'B'] : ['p', 'e'];
+      map.zones.forEach((zn, i) => {
+        const st = zs[i] || { cap: 0, owner: '' };
+        const col = st.owner ? (st.owner === mine ? '95,224,138' : '255,93,93') : '207,227,245';
+        ctx.fillStyle = `rgba(${col},${st.owner ? 0.12 : 0.07})`; ctx.beginPath(); ctx.arc(zn.x, zn.y, zn.r, 0, TAU); ctx.fill();
+        ctx.lineWidth = 4; ctx.strokeStyle = `rgba(${col},.75)`; ctx.setLineDash([22, 14]); ctx.lineDashOffset = -this.time * 12; ctx.beginPath(); ctx.arc(zn.x, zn.y, zn.r, 0, TAU); ctx.stroke(); ctx.setLineDash([]);
+        const frac = Math.abs(st.cap), side = st.cap >= 0 ? teams[0] : teams[1];
+        if (frac > 0.02 && frac < 0.999) { ctx.strokeStyle = side === mine ? '#5fe08a' : '#ff5d5d'; ctx.lineWidth = 8; ctx.beginPath(); ctx.arc(zn.x, zn.y, zn.r - 10, -Math.PI / 2, -Math.PI / 2 + TAU * frac); ctx.stroke(); }
+        ctx.font = '700 28px "Segoe UI", sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = `rgba(${col},.9)`; ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.lineWidth = 4;
+        const lbl = 'ZONA ' + 'ABC'[i] + (st.contested ? ' ⚔' : ''); ctx.strokeText(lbl, zn.x, zn.y + 9); ctx.fillText(lbl, zn.x, zn.y + 9);
+      });
+    }
+    if (map.route.length) {
+      ctx.strokeStyle = 'rgba(255,214,102,.35)'; ctx.lineWidth = 10; ctx.setLineDash([30, 22]); ctx.lineDashOffset = -this.time * 20;
+      ctx.beginPath(); map.route.forEach((p, i) => { if (i) ctx.lineTo(p[0], p[1]); else ctx.moveTo(p[0], p[1]); }); ctx.stroke(); ctx.setLineDash([]);
+      const e = map.route[map.route.length - 1];
+      ctx.fillStyle = 'rgba(255,214,102,.14)'; ctx.beginPath(); ctx.arc(e[0], e[1], 150, 0, TAU); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,214,102,.8)'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(e[0], e[1], 150, 0, TAU); ctx.stroke();
+      ctx.font = '700 26px "Segoe UI", sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = '#ffd666'; ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.lineWidth = 4; ctx.strokeText('🏁 DESTINO', e[0], e[1] + 9); ctx.fillText('🏁 DESTINO', e[0], e[1] + 9);
+    }
+  },
+
+  /** névoa, chuva, raios e escuridão do ambiente */
+  drawWeather() {
+    const ctx = this.ctx, E = this.env || BIOMES.oceano, W = this.W, H = this.H;
+    if (E.mist) { ctx.fillStyle = `rgba(210,222,230,${E.mist})`; ctx.fillRect(0, 0, W, H); }
+    if (E.rain) {
+      ctx.strokeStyle = 'rgba(190,215,235,.45)'; ctx.lineWidth = 1.2; ctx.beginPath();
+      for (const d of this.drops) {
+        d.y += d.v * 0.03; d.x -= d.v * 0.008; if (d.y > 1) { d.y = 0; d.x = Math.random(); } if (d.x < 0) d.x += 1;
+        const x = d.x * W, y = d.y * H; ctx.moveTo(x, y); ctx.lineTo(x - 5, y + 14);
+      }
+      ctx.stroke();
+      if (this.bolt > 0) { ctx.fillStyle = `rgba(235,240,255,${(this.bolt * 0.9).toFixed(2)})`; ctx.fillRect(0, 0, W, H); }
     }
   },
 
@@ -1828,11 +2376,25 @@ const Battle = {
         ctx.rotate(Math.atan2(p.vx, -p.vy));
         ctx.fillStyle = '#ffd27a'; ctx.fillRect(-1.6, -7, 3.2, 14);
         break;
-      case 'missile':
-        ctx.rotate(p.ang);
+      case 'missile': {
+        const sc = p.size === 'G' ? 1.35 : p.size === 'L' ? 0.75 : 1, col = (LOCKS[p.lock || 'radar'] || LOCKS.radar).col;
+        ctx.rotate(p.ang); ctx.scale(sc, sc);
         ctx.fillStyle = '#e6eaee'; ctx.fillRect(-2.5, -8, 5, 14);
-        ctx.fillStyle = '#e8503a'; ctx.fillRect(-2.5, -8, 5, 4);
+        ctx.fillStyle = col; ctx.fillRect(-2.5, -8, 5, 4);
+        ctx.fillStyle = '#9aa4ae'; poly(ctx, [[-2.5, 3], [-5.5, 7], [-2.5, 6]]); ctx.fill(); poly(ctx, [[2.5, 3], [5.5, 7], [2.5, 6]]); ctx.fill();
         break;
+      }
+      case 'ballistic': {
+        const k = clamp(1 - p.life / p.T, 0, 1), h = 4 * k * (1 - k), sc = p.size === 'G' ? 1.5 : p.size === 'M' ? 1.2 : 1;
+        ctx.fillStyle = 'rgba(0,0,0,.3)'; ctx.beginPath(); ctx.ellipse(0, 0, 5, 3.5, 0, 0, TAU); ctx.fill();            // sombra no mar
+        ctx.translate(0, -h * 260); ctx.scale(sc * (0.9 + 0.6 * h), sc * (0.9 + 0.6 * h));
+        ctx.rotate(Math.atan2(p.tx - p.x0, -(p.ty - p.y0)) + (k > 0.5 ? Math.PI : 0) * 0);
+        ctx.fillStyle = '#eef1f4'; ctx.fillRect(-3, -12, 6, 22);
+        ctx.fillStyle = '#c0392b'; poly(ctx, [[-3, -12], [3, -12], [0, -19]]); ctx.fill();
+        ctx.fillStyle = '#556070'; poly(ctx, [[-3, 6], [-7, 12], [-3, 10]]); ctx.fill(); poly(ctx, [[3, 6], [7, 12], [3, 10]]); ctx.fill();
+        if (k < 0.55) { ctx.fillStyle = 'rgba(255,170,60,.85)'; poly(ctx, [[-2.5, 10], [2.5, 10], [0, 20 + Math.random() * 6]]); ctx.fill(); }
+        break;
+      }
       case 'mortar': {
         const k = clamp(1 - p.life / p.T, 0, 1), h = 4 * k * (1 - k);
         ctx.fillStyle = 'rgba(0,0,0,.28)'; ctx.beginPath(); ctx.ellipse(0, 0, 4 + h, 3 + h * 0.6, 0, 0, TAU); ctx.fill();
@@ -1864,6 +2426,35 @@ const Battle = {
     ctx.restore();
   },
 
+  /** alerta de míssil balístico: círculo de impacto + contagem regressiva (vermelho = inimigo) */
+  drawBallMarker(p) {
+    const ctx = this.ctx, k = clamp(1 - p.life / p.T, 0, 1), foe = p.team !== this.player.team, left = Math.max(0, p.life);
+    ctx.save();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = foe ? `rgba(255,70,70,${(0.55 + 0.35 * Math.sin(this.time * 12)).toFixed(3)})` : 'rgba(120,255,160,.45)';
+    ctx.fillStyle = foe ? 'rgba(255,50,50,.10)' : 'rgba(80,255,140,.05)';
+    ctx.beginPath(); ctx.arc(p.tx, p.ty, p.splash, 0, TAU); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.arc(p.tx, p.ty, Math.max(3, p.splash * (1 - k)), 0, TAU); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(p.tx - 14, p.ty); ctx.lineTo(p.tx + 14, p.ty); ctx.moveTo(p.tx, p.ty - 14); ctx.lineTo(p.tx, p.ty + 14); ctx.stroke();
+    ctx.font = '700 20px "Segoe UI", sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = foe ? '#ff7a7a' : '#9ff0b0'; ctx.strokeStyle = 'rgba(0,0,0,.6)'; ctx.lineWidth = 4;
+    const lbl = (foe ? '⚠ ' : '') + left.toFixed(1) + 's'; ctx.strokeText(lbl, p.tx, p.ty - p.splash - 8); ctx.fillText(lbl, p.tx, p.ty - p.splash - 8);
+    ctx.restore();
+  },
+  /** região marcada no minimapa (alvo do próximo míssil balístico) */
+  drawStrike() {
+    const sp = this.strikePt;
+    if (!sp || !this.player.stats.ballistics) return;
+    const ctx = this.ctx;
+    let rad = 0; for (const c of this.player.list) if (c.top && PARTS[c.top.type].kind === 'ballistic') rad = Math.max(rad, PARTS[c.top.type].splash);
+    ctx.save();
+    ctx.setLineDash([12, 10]); ctx.lineDashOffset = -this.time * 20; ctx.strokeStyle = 'rgba(255,214,102,.8)'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(sp.x, sp.y, rad || 80, 0, TAU); ctx.stroke(); ctx.setLineDash([]);
+    ctx.beginPath(); ctx.moveTo(sp.x - 18, sp.y); ctx.lineTo(sp.x + 18, sp.y); ctx.moveTo(sp.x, sp.y - 18); ctx.lineTo(sp.x, sp.y + 18); ctx.stroke();
+    ctx.font = '700 16px "Segoe UI", sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = '#ffd666'; ctx.strokeStyle = 'rgba(0,0,0,.6)'; ctx.lineWidth = 3;
+    ctx.strokeText('🎯 ALVO', sp.x, sp.y - (rad || 80) - 8); ctx.fillText('🎯 ALVO', sp.x, sp.y - (rad || 80) - 8);
+    ctx.restore();
+  },
+
   /** círculo no ponto de queda de uma granada de morteiro (vermelho = inimiga) */
   drawMortarMarker(p) {
     const ctx = this.ctx, k = clamp(1 - p.life / p.T, 0, 1), foe = p.team !== this.player.team;
@@ -1879,6 +2470,7 @@ const Battle = {
     for (const p of this.parts) {
       if (p.layer !== layer || !this.inVision(p.x, p.y)) continue;
       const k = p.life / p.max;
+      if (!(p.s >= 0)) p.s = 0;
       switch (p.t) {
         case 'smoke': ctx.fillStyle = `rgba(45,50,58,${(k * 0.55 * p.a).toFixed(3)})`; ctx.beginPath(); ctx.arc(p.x, p.y, p.s, 0, TAU); ctx.fill(); break;
         case 'fire':
@@ -1991,6 +2583,24 @@ const Battle = {
     c.clearRect(0, 0, S, S);
     c.fillStyle = 'rgba(8,24,44,.75)'; c.fillRect(0, 0, S, S);
     c.strokeStyle = 'rgba(255,93,74,.7)'; c.lineWidth = 2; c.strokeRect(1, 1, S - 2, S - 2);
+    const E = this.env || BIOMES.oceano;
+    for (const isl of this.islands) {                                  // ilhas
+      c.beginPath(); isl.pts.forEach((p, i) => { const x = (isl.x + p[0] + HALF) * k, y = (isl.y + p[1] + HALF) * k; if (i) c.lineTo(x, y); else c.moveTo(x, y); }); c.closePath();
+      c.fillStyle = E.ice ? 'rgba(235,245,255,.85)' : E.lava ? 'rgba(150,70,40,.9)' : 'rgba(150,185,110,.85)'; c.fill();
+    }
+    if (this.map) {
+      const zs = (this.mode === 'online' ? (this.objState && this.objState.z) : (this.zoneState && this.zoneState.z)) || [];
+      this.map.zones.forEach((zn, i) => {
+        const st = zs[i] || { owner: '' };
+        c.strokeStyle = st.owner ? (st.owner === this.player.team ? '#5fe08a' : '#ff5d5d') : '#cfe3f5'; c.lineWidth = 2;
+        c.beginPath(); c.arc((zn.x + HALF) * k, (zn.y + HALF) * k, zn.r * k, 0, TAU); c.stroke();
+      });
+      if (this.map.route.length) {
+        c.strokeStyle = 'rgba(255,214,102,.8)'; c.lineWidth = 2; c.setLineDash([4, 3]); c.beginPath();
+        this.map.route.forEach((p, i) => { const x = (p[0] + HALF) * k, y = (p[1] + HALF) * k; if (i) c.lineTo(x, y); else c.moveTo(x, y); }); c.stroke(); c.setLineDash([]);
+        const e = this.map.route[this.map.route.length - 1]; c.fillStyle = '#ffd666'; c.fillRect((e[0] + HALF) * k - 3, (e[1] + HALF) * k - 3, 6, 6);
+      }
+    }
     for (const o of this.obs) {                                       // círculos de visão
       c.fillStyle = 'rgba(120,200,255,.10)'; c.strokeStyle = 'rgba(120,200,255,.35)'; c.lineWidth = 1;
       c.beginPath(); c.arc((o.x + HALF) * k, (o.y + HALF) * k, o.vision * k, 0, TAU); c.fill(); c.stroke();
@@ -2004,8 +2614,18 @@ const Battle = {
       if (s === this.player) {
         c.save(); c.translate(x, y); c.rotate(s.ang); c.fillStyle = '#fff';
         poly(c, [[0, -6], [4, 5], [-4, 5]]); c.fill(); c.restore();
-      } else if (s.team === this.player.team) { c.fillStyle = '#5fe08a'; c.beginPath(); c.arc(x, y, 3.5, 0, TAU); c.fill(); }
+      } else if (s.cargo) { c.fillStyle = '#ffd666'; c.fillRect(x - 4, y - 4, 8, 8); }
+      else if (s.team === this.player.team) { c.fillStyle = '#5fe08a'; c.beginPath(); c.arc(x, y, 3.5, 0, TAU); c.fill(); }
       else { c.fillStyle = mode === 'blip' ? '#ffa35a' : '#ff5d5d'; c.beginPath(); c.arc(x, y, 3 + Math.min(3, s.initialHull / 30), 0, TAU); c.fill(); }
+    }
+    for (const p of this.shots) if (p.kind === 'ballistic') {          // mísseis balísticos a caminho: impacto previsto
+      const x = (p.tx + HALF) * k, y = (p.ty + HALF) * k, foe = p.team !== this.player.team;
+      c.strokeStyle = foe ? '#ff4d4d' : '#7dffa8'; c.lineWidth = 1.6; c.beginPath(); c.arc(x, y, Math.max(3, p.splash * k), 0, TAU); c.stroke();
+      c.beginPath(); c.moveTo(x - 4, y); c.lineTo(x + 4, y); c.moveTo(x, y - 4); c.lineTo(x, y + 4); c.stroke();
+    }
+    if (this.strikePt) {                                               // alvo marcado
+      const x = (this.strikePt.x + HALF) * k, y = (this.strikePt.y + HALF) * k;
+      c.strokeStyle = '#ffd666'; c.lineWidth = 1.8; c.beginPath(); c.arc(x, y, 6, 0, TAU); c.moveTo(x - 9, y); c.lineTo(x + 9, y); c.moveTo(x, y - 9); c.lineTo(x, y + 9); c.stroke();
     }
   },
 };

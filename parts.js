@@ -9,7 +9,7 @@
    A proa (frente) do navio aponta para CIMA da grade.
    ===================================================================== */
 
-const VERSION = '1.8.1';
+const VERSION = '1.9.0';
 const GRID_W = 13;
 const GRID_H = 17;
 const BASE_BUDGET = 220;
@@ -210,6 +210,85 @@ const PARTS = {
     desc: 'Equipe de reparos: recupera lentamente a vida das peças próximas durante a batalha.' },
 };
 
+/* ================= v1.9: mísseis de cruzeiro, balísticos, flares, mais drones e placas ================= */
+/** tipos de "lock" (como o míssil de cruzeiro escolhe o alvo) */
+const LOCKS = {
+  radar: { name: 'Radar', col: '#e8503a', cost: 0, turn: 0,
+    desc: 'Radar ativo: trava no inimigo detectado mais perto do cursor e o persegue. O Bloqueador atrapalha e a Defesa Pontual o derruba.' },
+  heat: { name: 'Térmico', col: '#ff9a3c', cost: 6, turn: 0.3,
+    desc: 'Busca de calor: persegue o motor mais potente do alvo (motor elétrico é frio; placa isolante esconde o calor). Imune ao Bloqueador, mas flares o enganam.' },
+  gps: { name: 'GPS', col: '#4cc9ff', cost: -4, turn: -0.4,
+    desc: 'Voa até as coordenadas do cursor, mesmo sem enxergar o alvo; no final procura um navio por perto. Imune a bloqueador e flares, mas erra alvos que se mexem. Alcance 60% maior.' },
+  tele: { name: 'Teleguiado', col: '#7bd86a', cost: 4, turn: 0.5,
+    desc: 'Você o conduz: ele segue o cursor (ou a mira do joystick) enquanto voa. Bloqueador corta o link; flares não o enganam. 15% mais rápido.' },
+};
+const MISSILE_SIZES = {
+  L: { label: 'Leve',   dmg: 4,  reload: 3.2, speed: 330, range: 900,  splash: 22, turn: 2.8, cost: 22, hp: 2, mass: 1.0, scale: 0.8 },
+  M: { label: 'Médio',  dmg: 7,  reload: 4.5, speed: 250, range: 800,  splash: 30, turn: 2.4, cost: 32, hp: 2, mass: 1.6, scale: 1 },
+  G: { label: 'Pesado', dmg: 14, reload: 8,   speed: 200, range: 1100, splash: 46, turn: 1.7, cost: 54, hp: 3, mass: 2.8, scale: 1.25 },
+};
+const MISSILE_CODES = {
+  radar: { L: 'α', M: 'u', G: 'β' },
+  heat:  { L: 'γ', M: 'δ', G: 'ε' },
+  gps:   { L: 'ζ', M: 'η', G: 'θ' },
+  tele:  { L: 'ι', M: 'κ', G: 'λ' },
+};
+for (const lock in MISSILE_CODES) for (const sz in MISSILE_CODES[lock]) {
+  const code = MISSILE_CODES[lock][sz], S = MISSILE_SIZES[sz], L = LOCKS[lock];
+  PARTS[code] = Object.assign(PARTS[code] || {}, {
+    layer: 'top', kind: 'missile', lock, size: sz,
+    name: code === 'u' ? 'Míssil Guiado' : 'Míssil ' + L.name + ' ' + S.label,
+    cost: Math.max(10, S.cost + L.cost), hp: S.hp, mass: S.mass,
+    dmg: S.dmg, reload: S.reload, speed: Math.round(S.speed * (lock === 'tele' ? 1.15 : 1)), range: Math.round(S.range * (lock === 'gps' ? 1.6 : 1)),
+    splash: S.splash, turn: +(S.turn + L.turn).toFixed(2),
+    desc: 'Míssil de cruzeiro ' + S.label.toLowerCase() + ' (lock ' + L.name + '). ' + L.desc + ' (Espaço ou botão direito)',
+  });
+}
+const BALLISTIC_CODES = { μ: 'S', ν: 'M', ξ: 'G' };
+const BALLISTIC_SIZES = {
+  S: { label: 'Pequeno', dmg: 6,  splash: 60,  reload: 14, cost: 60,  hp: 3, mass: 3,   scale: 0.8 },
+  M: { label: 'Médio',   dmg: 10, splash: 85, reload: 22, cost: 95,  hp: 4, mass: 4.5, scale: 1 },
+  G: { label: 'Grande',  dmg: 16, splash: 115, reload: 36, cost: 150, hp: 5, mass: 7,   scale: 1.2 },
+};
+for (const code in BALLISTIC_CODES) {
+  const sz = BALLISTIC_CODES[code], S = BALLISTIC_SIZES[sz];
+  PARTS[code] = { layer: 'top', kind: 'ballistic', size: sz, name: 'Míssil Balístico ' + S.label, cost: S.cost, hp: S.hp, mass: S.mass,
+    dmg: S.dmg, splash: S.splash, reload: S.reload, speed: 420, range: 3600, minRange: 300, scatter: 36,
+    desc: 'Marque uma região no MINIMAPA (clique/toque) e lance com a tecla B (ou o botão 🎯). Voa em arco por cima de tudo (nada o intercepta), leva alguns segundos e cai com explosão enorme (' + S.splash + ' de raio) — o inimigo vê o alerta. Mais impreciso à distância.' };
+}
+PARTS['ο'] = { layer: 'top', kind: 'flare', name: 'Lançador de Flares', cost: 18, hp: 2, mass: 0.9, reload: 7, salvo: 4, life: 4.5, range: 360,
+  desc: 'Defesa automática: quando um míssil térmico se aproxima, lança iscas quentes que o desviam. Vários lançadores = mais salvas.' };
+
+/* drones novos */
+PARTS['π'] = { layer: 'top', kind: 'hangar', drone: 'escort', name: 'Drone Escolta', cost: 36, hp: 4, mass: 2.4, relaunch: 16, speed: 220, dhp: 7, fuel: 45, vision: 260,
+  gun: { dmg: 0.9, reload: 0.13, range: 190 },
+  desc: 'Drone armado com metralhadora: fica perto do cursor, derruba drones inimigos e atira em navios que chegam perto. Bom para proteger o navio.' };
+PARTS['ρ'] = { layer: 'top', kind: 'hangar', drone: 'bomber', name: 'Drone Bombardeiro', cost: 52, hp: 5, mass: 3, relaunch: 22, speed: 160, dhp: 9, fuel: 34, vision: 200, bomb: { dmg: 8, splash: 50, every: 1.9 },
+  desc: 'Lento e resistente: sobrevoa o alvo detectado e solta bombas grandes. Volta ao hangar quando o combustível acaba.' };
+PARTS['σ'] = { layer: 'top', kind: 'hangar', drone: 'torpedo', name: 'Drone Torpedeiro', cost: 46, hp: 4, mass: 2.6, relaunch: 24, speed: 190, dhp: 5, fuel: 30, vision: 220, torp: { dmg: 10, splash: 38, speed: 200, turn: 1.2 },
+  desc: 'Lançado com Espaço/botão direito: voa até o inimigo detectado, solta um torpedo guiado e volta para casa.' };
+PARTS['τ'] = { layer: 'top', kind: 'hangar', drone: 'swarm', name: 'Drone Enxame', cost: 40, hp: 4, mass: 2.4, relaunch: 20, speed: 300, dhp: 1.5, fuel: 12, vision: 140, boom: { dmg: 4.5, splash: 24 }, count: 3,
+  desc: 'Lança 3 mini-drones suicidas (Espaço/botão direito) que mergulham no inimigo. Frágeis, mas difíceis de abater todos.' };
+PARTS['υ'] = { layer: 'top', kind: 'hangar', drone: 'aew', name: 'Drone Radar (AEW)', cost: 44, hp: 4, mass: 2.4, relaunch: 26, speed: 120, dhp: 4, fuel: 100, vision: 720,
+  desc: 'Lento e frágil, mas enxerga a 720: voa até o cursor (até 900 do navio) e revela uma área enorme para você e seus aliados.' };
+
+/* mais placas de convés */
+PARTS['φ'] = { layer: 'top', kind: 'plate', name: 'Placa Pesada', cost: 16, hp: 30, mass: 5, soak: 0.7,
+  desc: 'Blindagem de convés grossa: reduz 0,7 de cada tiro e aguenta muito dano, mas é pesada.' };
+PARTS['χ'] = { layer: 'top', kind: 'plate', name: 'Placa Cerâmica', cost: 14, hp: 12, mass: 2.2, soak: 1.0, blast: 1.6,
+  desc: 'Quase imune a tiros leves (reduz 1,0 de cada), mas racha com explosões (+60% de dano de torpedo, míssil e morteiro).' };
+PARTS['ψ'] = { layer: 'top', kind: 'plate', name: 'Placa de Titânio', cost: 20, hp: 24, mass: 1.8, soak: 0.45,
+  desc: 'Resistente e leve: o melhor equilíbrio entre peso e proteção entre as placas.' };
+PARTS['ω'] = { layer: 'top', kind: 'plate', name: 'Placa Corta-fogo', cost: 10, hp: 12, mass: 1.8, soak: 0.25, fireproof: true,
+  desc: 'A célula que a carrega não pega fogo e o fogo não passa por ela. Ótima sobre depósitos de munição.' };
+PARTS['Σ'] = { layer: 'top', kind: 'plate', name: 'Placa Isolante Térmica', cost: 12, hp: 10, mass: 1.4, soak: 0.2, heatShield: 0.5,
+  desc: 'Esconde o calor dos motores vizinhos (4 lados): cada placa reduz à metade a atração dos mísseis térmicos por eles.' };
+
+/** grupos da paleta, na ordem em que aparecem */
+const GROUP_ORDER = ['Casco', 'Blindagem de convés', 'Ponte', 'Aletas', 'Canhões', 'Morteiros', 'Metralhadoras', 'Corpo a corpo', 'Torpedos',
+  'Mísseis de cruzeiro', 'Mísseis balísticos', 'Drones', 'Propulsão', 'Submarino', 'Controle de avarias', 'Sensores e furtividade', 'Apoio', 'Contramedidas',
+  'Tripulação (invisível ao inimigo)', 'Ferramentas'];
+
 /** ferramentas da paleta do estaleiro */
 const TOOLS = [
   { key: 'o', part: 'o', group: 'Casco' },
@@ -245,12 +324,12 @@ const TOOLS = [
   { key: '!', part: '!', group: 'Corpo a corpo' },
   { key: '~', part: '~', group: 'Corpo a corpo' },
   { key: '?', part: '?', group: 'Corpo a corpo' },
-  { key: 't', part: 't', group: 'Torpedos e mísseis' },
-  { key: 'a', part: 'a', group: 'Torpedos e mísseis' },
-  { key: 'i', part: 'i', group: 'Torpedos e mísseis' },
-  { key: 'l', part: 'l', group: 'Torpedos e mísseis' },
-  { key: 'y', part: 'y', group: 'Torpedos e mísseis' },
-  { key: 'u', part: 'u', group: 'Torpedos e mísseis' },
+  { key: 't', part: 't', group: 'Torpedos' },
+  { key: 'a', part: 'a', group: 'Torpedos' },
+  { key: 'i', part: 'i', group: 'Torpedos' },
+  { key: 'l', part: 'l', group: 'Torpedos' },
+  { key: 'y', part: 'y', group: 'Torpedos' },
+  { key: 'u', part: 'u', group: 'Mísseis de cruzeiro' },
   { key: 'I', part: 'I', group: 'Drones' },
   { key: 'O', part: 'O', group: 'Drones' },
   { key: 'P', part: 'P', group: 'Drones' },
@@ -275,8 +354,8 @@ const TOOLS = [
   { key: 'Y', part: 'Y', group: 'Sensores e furtividade' },
   { key: 'Q', part: 'Q', group: 'Sensores e furtividade' },
   { key: 'G', part: 'G', group: 'Apoio' },
-  { key: 'D', part: 'D', group: 'Apoio' },
-  { key: 'J', part: 'J', group: 'Apoio' },
+  { key: 'D', part: 'D', group: 'Contramedidas' },
+  { key: 'J', part: 'J', group: 'Contramedidas' },
   { key: 'Z', part: 'Z', group: 'Apoio' },
   { key: 'X', part: 'X', group: 'Apoio' },
   { key: 'K:g', crew: 'g', group: 'Tripulação (invisível ao inimigo)' },
@@ -289,6 +368,17 @@ const TOOLS = [
   { key: 'x', part: null, group: 'Ferramentas', eraser: true, name: 'Borracha', cost: 0,
     desc: 'Apaga a peça de cima; depois a tripulação; depois o casco. Botão direito apaga tudo na célula.' },
 ];
+{
+  const add = (code, group) => TOOLS.push({ key: code, part: code, group });
+  for (const lock in MISSILE_CODES) for (const sz of ['L', 'M', 'G']) { const c = MISSILE_CODES[lock][sz]; if (c !== 'u') add(c, 'Mísseis de cruzeiro'); }
+  for (const c in BALLISTIC_CODES) add(c, 'Mísseis balísticos');
+  add('ο', 'Contramedidas');
+  for (const c of ['π', 'ρ', 'σ', 'τ', 'υ']) add(c, 'Drones');
+  for (const c of ['φ', 'χ', 'ψ', 'ω', 'Σ']) add(c, 'Blindagem de convés');
+  const ord = TOOLS.map((t, i) => [t, i]);
+  ord.sort((a, b) => (GROUP_ORDER.indexOf(a[0].group) - GROUP_ORDER.indexOf(b[0].group)) || (a[1] - b[1]));
+  TOOLS.length = 0; for (const [t] of ord) TOOLS.push(t);
+}
 for (const t of TOOLS) {
   if (t.crew) { const c = CREW[t.crew]; t.name = c.name; t.cost = c.cost; t.desc = c.desc + ' Fica escondida dos inimigos.'; t.layer = 'crew'; }
   if (t.part) { const p = PARTS[t.part]; t.name = p.name; t.cost = p.cost; t.desc = p.desc; t.layer = p.layer; }
@@ -302,7 +392,8 @@ function shipStats(cells) {
     shields: 0, shield: 0, regen: 0, pd: 0, thrusters: 0, dps: 0,
     radars: 0, sonars: 0, sonarR: 0, pings: 0, pingR: 0, jammers: 0, loaders: 0, fcs: 0, stealthW: 0, hullCount: 0,
     sub: false, periscopes: 0, ballast: 0, batteries: 0, mines: 0, depths: 0, thrustSub: 0, silentThrust: 0, nuclear: false, turnBonus: 0,
-    melee: 0, meleeKinds: {}, pumps: 0, sprinklers: 0, hangars: 0, droneKinds: {}, floats: 0, bulkheads: 0, crew: {}, crewCount: 0 };
+    melee: 0, meleeKinds: {}, pumps: 0, sprinklers: 0, hangars: 0, droneKinds: {}, floats: 0, bulkheads: 0, crew: {}, crewCount: 0,
+    ballistics: 0, flares: 0, lockKinds: {}, plates: 0 };
   for (const c of cells) {
     const b = PARTS[c.base];
     s.mass += b.mass; s.hp += b.hp; s.cost += b.cost; s.count++;
@@ -320,7 +411,10 @@ function shipStats(cells) {
       case 'mortar': s.mortars++; s.dps += t.dmg / t.reload * 0.6; break;
       case 'mg': s.mgs++; s.dps += t.dmg / t.reload * 0.6; break;
       case 'torp': s.torps++; s.dps += t.dmg / t.reload * 0.8; break;
-      case 'missile': s.missiles++; s.dps += t.dmg / t.reload * 0.8; break;
+      case 'missile': s.missiles++; s.lockKinds[t.lock || 'radar'] = (s.lockKinds[t.lock || 'radar'] || 0) + 1; s.dps += t.dmg / t.reload * 0.8; break;
+      case 'ballistic': s.ballistics++; s.dps += t.dmg / t.reload * 0.7; break;
+      case 'flare': s.flares++; break;
+      case 'plate': s.plates++; break;
       case 'shield': s.shields++; s.shield += t.cap; s.regen += t.regen; break;
       case 'pd': s.pd++; break;
       case 'thruster': s.thrusters++; break;
@@ -345,12 +439,12 @@ function shipStats(cells) {
       case 'melee': s.melee++; s.meleeKinds[t.mkind] = (s.meleeKinds[t.mkind] || 0) + 1; s.dps += { spike: 4, saw: 9, ram: 5, hook: 1.5, shock: 2 }[t.mkind] || 0; break;
       case 'pump': s.pumps++; break;
       case 'sprinkler': s.sprinklers++; break;
-      case 'hangar': s.hangars++; s.droneKinds[t.drone] = (s.droneKinds[t.drone] || 0) + 1; s.dps += t.drone === 'attack' ? 4 : t.drone === 'kamikaze' ? 3 : 0; break;
+      case 'hangar': s.hangars++; s.droneKinds[t.drone] = (s.droneKinds[t.drone] || 0) + 1; s.dps += { attack: 4, kamikaze: 3, bomber: 5, torpedo: 3, swarm: 3, escort: 2 }[t.drone] || 0; break;
       case 'repair': s.repairs++; break;
     }
   }
   const m = Math.max(s.mass, 1);
-  s.weapons = s.cannons + s.mortars + s.mgs + s.torps + s.missiles + s.mines + s.depths + s.melee + (s.droneKinds.attack || 0) + (s.droneKinds.kamikaze || 0);
+  s.weapons = s.cannons + s.mortars + s.mgs + s.torps + s.missiles + s.ballistics + s.mines + s.depths + s.melee + (s.droneKinds.attack || 0) + (s.droneKinds.kamikaze || 0) + (s.droneKinds.bomber || 0) + (s.droneKinds.torpedo || 0) + (s.droneKinds.swarm || 0) + (s.droneKinds.escort || 0);
   s.maxSpeed = Math.min(300, s.thrust / m * 45);          // px/s
   s.accel = s.maxSpeed * 0.25;                             // arrasto longitudinal = 0.25/s
   s.turn = (0.55 + 0.28 * s.lat + 0.5 * s.rear + 0.3 * s.thrusters + s.turnBonus) * clamp(Math.sqrt(25 / m), 0.45, 1.4); // rad/s
@@ -461,7 +555,8 @@ function validateDesign(d, budget, rules) {
         const h = d.hull[y][x], t = d.top[y][x];
         if (h === 'U') sub = true;
         if (h === 's' || t === 'Q') stealth = true;
-        if (t === 'u' || t === 'a') guided = true;
+        const tp = t && PARTS[t];
+        if (t === 'a' || (tp && (tp.kind === 'missile' || tp.kind === 'ballistic'))) guided = true;
       }
       if (rules.allowSub === false && sub) return { ok: false, error: 'Submarinos não são permitidos nesta sala.' };
       if (rules.allowStealth === false && stealth) return { ok: false, error: 'Peças furtivas não são permitidas nesta sala.' };
@@ -1009,6 +1104,75 @@ const PRESETS = [
     '  j   j  ',
     '         ',
   ]) },
+  { id: 'lancamisseis', name: 'Fragata Lança-mísseis', power: 6, minWave: 7, role: 'Mísseis radar, térmico, GPS e teleguiado, com flares e defesa pontual.', design: makeDesign([
+    '    #    ',
+    '   ###   ',
+    '  #####  ',
+    '  ##B##  ',
+    '<#######>',
+    ' ####### ',
+    ' ####### ',
+    '<#######>',
+    '  #####  ',
+    '  v v v  ',
+  ], [
+    '    δ    ',
+    '   γ ζ   ',
+    '  ι   κ  ',
+    '   D D   ',
+    '         ',
+    ' ο  m  ο ',
+    '    r    ',
+    ' e  E  e ',
+    '  e   e  ',
+    '         ',
+  ]) },
+  { id: 'defesaaerea', name: 'Defesa Aérea', power: 4, minWave: 5, role: 'Metralhadoras giratórias, drone escolta e drone radar: derruba drones e enxerga longe.', design: makeDesign([
+    '   #   ',
+    '  ###  ',
+    '  #B#  ',
+    '<#####>',
+    ' ##### ',
+    ' ##### ',
+    '  ###  ',
+    '  v v  ',
+  ], [
+    '   q   ',
+    '  k D  ',
+    '       ',
+    ' m π m ',
+    '  ο υ  ',
+    ' q   q ',
+    '  e e  ',
+    '       ',
+  ]) },
+  { id: 'balistico', name: 'Cruzador Balístico', power: 9, minWave: 11, role: 'Mísseis balísticos (marque no minimapa), drone escolta, flares e radar.', design: makeDesign([
+    '    #    ',
+    '   ###   ',
+    '  #####  ',
+    '  #####  ',
+    ' ###B### ',
+    '<#######>',
+    ' ####### ',
+    ' ####### ',
+    '<#######>',
+    ' ####### ',
+    '  #####  ',
+    '  v v v  ',
+  ], [
+    '    A    ',
+    '   ο ο   ',
+    '  μ   μ  ',
+    '    ξ    ',
+    '  D   D  ',
+    '    π    ',
+    ' q     q ',
+    '    r    ',
+    '  *   *  ',
+    ' E  E  E ',
+    '  e   e  ',
+    '         ',
+  ]) },
 ];
 
 PRESETS.sort((a, b) => a.power - b.power);
@@ -1035,14 +1199,192 @@ const PRESET_CREW = {
   sentinela: ['s', 's', 'r'], monitor: ['r', 'b', 'm', 'g'], cruzador: ['g', 'r', 'b', 's'], encouracado: ['g', 'r', 'b', 'm'],
   dreadnought: ['g', 'g', 'r', 'r', 'b', 'm', 't', 's'], cacasub: ['r', 's'], nuclear: ['r', 'b', 'm', 's'],
   abordador: ['f', 'f', 'r'], portadrones: ['s', 'r', 'b'], titan: ['r', 'b', 'm', 'f'],
+  lancamisseis: ['g', 'r', 'b'], defesaaerea: ['g', 's', 'r'], balistico: ['s', 'r', 'b', 'g'],
 };
 for (const p of PRESETS) if (PRESET_CREW[p.id]) autoCrew(p.design, PRESET_CREW[p.id]);
+
+/* ================= v1.9: mapas (ambientes, ilhas), zonas, rota do comboio e cargueiro ================= */
+const BIOMES = {
+  oceano:      { name: 'Mar aberto',           water: ['#17608c', '#0d3f66'], wave: '200,235,255', vis: 1,    isl: 0.8, land: ['#cdb98a', '#6f9a58', '#3f6b3a'], rain: 0, dark: 0,    mist: 0 },
+  arquipelago: { name: 'Arquipélago tropical', water: ['#13a3b4', '#0b6f8a'], wave: '220,255,250', vis: 1,    isl: 1.8, land: ['#ead9a0', '#58b04a', '#2f7a3a'], rain: 0, dark: 0,    mist: 0 },
+  artico:      { name: 'Mar Ártico',           water: ['#3f86aa', '#285a7c'], wave: '235,248,255', vis: 0.95, isl: 1.2, land: ['#f2f7fb', '#cfe1ee', '#a9c6da'], rain: 0, dark: 0,    mist: 0.08, ice: true },
+  tempestade:  { name: 'Tempestade',           water: ['#2b4258', '#15283a'], wave: '170,200,225', vis: 0.8,  isl: 0.9, land: ['#8f8a78', '#4b5d48', '#2f3f33'], rain: 1, dark: 0.18, mist: 0.1 },
+  nevoeiro:    { name: 'Nevoeiro',             water: ['#58798f', '#37566a'], wave: '225,235,240', vis: 0.6,  isl: 1.0, land: ['#b5ae98', '#6d8a68', '#47624a'], rain: 0, dark: 0,    mist: 0.4 },
+  noite:       { name: 'Noite',                water: ['#0b2038', '#050f1b'], wave: '120,160,210', vis: 0.75, isl: 1.0, land: ['#6b6a58', '#2f4a3a', '#1e3328'], rain: 0, dark: 0.45, mist: 0 },
+  vulcanico:   { name: 'Costa vulcânica',      water: ['#2a3b46', '#141d26'], wave: '150,170,185', vis: 0.9,  isl: 1.5, land: ['#3a3532', '#262220', '#7a2a14'], rain: 0, dark: 0.15, mist: 0.05, lava: true },
+};
+const BIOME_KEYS = Object.keys(BIOMES);
+const ISLAND_LEVELS = { 0: 'Nenhuma', 1: 'Poucas', 2: 'Normais', 3: 'Muitas' };
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+/** distância do ponto (x,y) ao segmento a-b */
+function segDist(x, y, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+  const t = l2 ? clamp(((x - a[0]) * dx + (y - a[1]) * dy) / l2, 0, 1) : 0;
+  return Math.hypot(x - (a[0] + dx * t), y - (a[1] + dy * t));
+}
+/** ponto dentro do polígono da ilha (com folga `pad`)? */
+function inIsland(isl, x, y, pad) {
+  const dx = x - isl.x, dy = y - isl.y, d = Math.hypot(dx, dy);
+  if (d > isl.r + pad) return false;
+  if (d < isl.rc) return true;
+  let inside = false;
+  const p = isl.pts;
+  for (let i = 0, j = p.length - 1; i < p.length; j = i++) {
+    const xi = p[i][0], yi = p[i][1], xj = p[j][0], yj = p[j][1];
+    if (((yi > dy) !== (yj > dy)) && (dx < (xj - xi) * (dy - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  if (inside) return true;
+  if (pad <= 0) return false;
+  for (let i = 0, j = p.length - 1; i < p.length; j = i++) if (segDist(dx, dy, p[j], p[i]) < pad) return true;
+  return false;
+}
+function freeOfIslands(map, x, y, pad) {
+  for (const o of map.islands) if (inIsland(o, x, y, pad)) return false;
+  return true;
+}
+
+/** gera o mapa (determinístico pela semente: cliente e servidor chegam ao mesmo resultado) */
+function genMap(seed, size, env, level, mode) {
+  const B = BIOMES[env] || BIOMES.oceano, H = size / 2, rnd = mulberry32((seed | 0) || 1);
+  const map = { seed: seed | 0, size, env: BIOMES[env] ? env : 'oceano', level: level | 0, mode: mode || '', islands: [], zones: [], route: [] };
+  if (mode === 'zone') map.zones = [{ x: 0, y: 0, r: 300 }, { x: 0, y: Math.round(-H * 0.55), r: 250 }, { x: 0, y: Math.round(H * 0.55), r: 250 }];
+  if (mode === 'convoy') map.route = [[-0.82, 0], [-0.45, -0.22], [-0.05, 0.18], [0.35, -0.12], [0.82, 0.02]].map(p => [Math.round(p[0] * H), Math.round(p[1] * H)]);
+  const want = Math.round((level || 0) * (size / 1500) * B.isl * 1.3);
+  const keepOut = (x, y, r) => {
+    if (!mode && Math.hypot(x, y) < 460 + r) return true;                      // campanha: o jogador nasce no centro
+    for (const z of map.zones) if (Math.hypot(x - z.x, y - z.y) < z.r + r + 80) return true;
+    for (let i = 0; i < map.route.length - 1; i++) if (segDist(x, y, map.route[i], map.route[i + 1]) < r + 280) return true;
+    return false;
+  };
+  for (let tries = 0; map.islands.length < want && tries < 500; tries++) {
+    const r = (110 + rnd() * 170) * (0.7 + 0.3 * size / 3600);
+    const x = (rnd() * 2 - 1) * (H - r - 240), y = (rnd() * 2 - 1) * (H - r - 240);
+    if (keepOut(x, y, r)) continue;
+    let ok = true;
+    for (const o of map.islands) if (Math.hypot(x - o.x, y - o.y) < o.r + r + 300) { ok = false; break; }
+    if (!ok) continue;
+    const n = 18, ph = rnd() * TAU, a1 = 0.1 + rnd() * 0.12, a2 = 0.06 + rnd() * 0.08, ks = [];
+    for (let i = 0; i < n; i++) { const a = i / n * TAU; ks.push(1 + a1 * Math.sin(a * 2 + ph) + a2 * Math.sin(a * 3 + ph * 1.7) + (rnd() - 0.5) * 0.08); }
+    const mx = Math.max(...ks), mn = Math.min(...ks);
+    const pts = ks.map((k, i) => { const a = i / n * TAU; return [Math.round(Math.cos(a) * r * k / mx), Math.round(Math.sin(a) * r * k / mx)]; });
+    map.islands.push({ x: Math.round(x), y: Math.round(y), r: Math.round(r), rc: Math.round(r * mn / mx * 0.95), pts, v: Math.floor(rnd() * 1e6) });
+  }
+  return map;
+}
+
+/** ponto de nascimento livre de ilhas. side: 'A' (esquerda), 'B' (direita) ou '' (anel). rnd: () => [0,1) */
+function pickSpawn(map, side, rnd, avoid) {
+  const H = map.size / 2, R = (a, b) => a + rnd() * (b - a);
+  let best = null;
+  for (let k = 0; k < 80; k++) {
+    let x, y;
+    if (side === 'A' || side === 'B') {
+      const s = side === 'A' ? -1 : 1;
+      if (map.mode === 'convoy') x = s < 0 ? R(-0.9, -0.62) * H : R(0.15, 0.7) * H; else x = s * R(0.55, 0.85) * H;
+      y = R(-0.6, 0.6) * H;
+    } else { const a = R(0, Math.PI * 2), d = R(0.5, 0.8) * H; x = Math.sin(a) * d; y = -Math.cos(a) * d; }
+    if (!freeOfIslands(map, x, y, 110)) continue;
+    let md = 1e9;
+    for (const q of avoid || []) md = Math.min(md, Math.hypot(q[0] - x, q[1] - y));
+    if (!best || md > best.md) best = { x, y, md };
+    if (md > 280) break;
+  }
+  if (!best) best = { x: 0, y: 0, md: 0 };
+  const face = side === 'A' ? 1 : side === 'B' ? -1 : 0;
+  const a = face ? (face > 0 ? Math.PI / 2 : -Math.PI / 2) : Math.atan2(-best.x, best.y);
+  return { x: Math.round(best.x), y: Math.round(best.y), a: +a.toFixed(3) };
+}
+
+/** controle de zona: atualiza capturas e pontuação (state = {z:[{cap,owner,contested}], score:{}}). ships: vivos [{x,y,team}] */
+function zoneStep(state, zones, ships, dt, teams, capTime) {
+  capTime = capTime || 9;
+  if (!state.z) state.z = []; if (!state.score) state.score = {};
+  zones.forEach((z, i) => {
+    const s = state.z[i] || (state.z[i] = { cap: 0, owner: '', contested: false });
+    let n0 = 0, n1 = 0;
+    for (const sh of ships) {
+      if (Math.hypot(sh.x - z.x, sh.y - z.y) > z.r) continue;
+      if (sh.team === teams[0]) n0++; else if (sh.team === teams[1]) n1++;
+    }
+    s.contested = n0 > 0 && n1 > 0;
+    if (n0 && !n1) s.cap = Math.min(1, s.cap + dt / capTime * Math.min(2, 0.6 + 0.4 * n0));
+    else if (n1 && !n0) s.cap = Math.max(-1, s.cap - dt / capTime * Math.min(2, 0.6 + 0.4 * n1));
+    if (s.owner === teams[0] && s.cap < 0.02) s.owner = '';
+    if (s.owner === teams[1] && s.cap > -0.02) s.owner = '';
+    if (s.cap >= 0.999) s.owner = teams[0]; else if (s.cap <= -0.999) s.owner = teams[1];
+    if (s.owner) state.score[s.owner] = (state.score[s.owner] || 0) + dt;
+  });
+}
+
+/* rota do comboio: poligonal com comprimentos acumulados */
+function routeLength(route) { let L = 0; for (let i = 0; i < route.length - 1; i++) L += Math.hypot(route[i + 1][0] - route[i][0], route[i + 1][1] - route[i][1]); return L; }
+/** projeta (x,y) na rota: { t: distância percorrida, d: distância até a rota } */
+function routeProject(route, x, y) {
+  let best = { t: 0, d: 1e9 }, acc = 0;
+  for (let i = 0; i < route.length - 1; i++) {
+    const a = route[i], b = route[i + 1], dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy) || 1;
+    const u = clamp(((x - a[0]) * dx + (y - a[1]) * dy) / (l * l), 0, 1), px = a[0] + dx * u, py = a[1] + dy * u, d = Math.hypot(x - px, y - py);
+    if (d < best.d) best = { t: acc + l * u, d };
+    acc += l;
+  }
+  return best;
+}
+/** ponto da rota a `t` unidades do início */
+function routePoint(route, t) {
+  let acc = 0;
+  for (let i = 0; i < route.length - 1; i++) {
+    const a = route[i], b = route[i + 1], l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+    if (t <= acc + l) { const u = (t - acc) / l; return [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u]; }
+    acc += l;
+  }
+  return route[route.length - 1].slice();
+}
+
+/** navio cargueiro do modo Comboio (sem armas ofensivas: só defesa pontual e metralhadoras) */
+const CARGO_DESIGN = makeDesign([
+  '    2    ',
+  '   222   ',
+  '  22222  ',
+  ' 2222222 ',
+  '<2222222>',
+  ' 3333333 ',
+  ' 3333333 ',
+  ' 3333333 ',
+  '<3333333>',
+  ' 222b222 ',
+  ' 2222222 ',
+  '  22222  ',
+  '   v v   ',
+], [
+  '         ',
+  '    q    ',
+  '   & &   ',
+  '  D   D  ',
+  '         ',
+  '  & & &  ',
+  '    0    ',
+  '  & r &  ',
+  '         ',
+  '  q   q  ',
+  ' E  *  E ',
+  '  0   0  ',
+  '         ',
+]);
 
 
 /* --------------------------------------------------------------- progresso */
 const Meta = {
   coins: 0, best: 0, design: null, name: '', server: '', zoom: 0,
-  bots: { diff: 'normal', mult: 1, allowed: null, startWave: 1, skirmish: {} },
+  bots: { diff: 'normal', mult: 1, allowed: null, startWave: 1, skirmish: {}, mode: '', allies: 2 },
+  map: { env: 'rand', level: 2 },
   budget() { return BASE_BUDGET + this.coins; },
   load() {
     try {
@@ -1057,6 +1399,12 @@ const Meta = {
         if (Array.isArray(b.allowed)) this.bots.allowed = b.allowed.filter(x => typeof x === 'string').slice(0, 60);
         if (+b.startWave >= 1 && +b.startWave <= 30) this.bots.startWave = +b.startWave | 0;
         if (b.skirmish && typeof b.skirmish === 'object') this.bots.skirmish = b.skirmish;
+        if (b.mode === 'zone' || b.mode === 'convoy') this.bots.mode = b.mode;
+        if (+b.allies >= 0 && +b.allies <= 4) this.bots.allies = +b.allies | 0;
+      }
+      if (j.map && typeof j.map === 'object') {
+        if (j.map.env === 'rand' || BIOMES[j.map.env]) this.map.env = j.map.env;
+        if (+j.map.level >= 0 && +j.map.level <= 3) this.map.level = +j.map.level | 0;
       }
       if (j.design && j.design.hull && j.design.top) this.design = normalizeDesign(j.design);
     } catch (e) { /* sem storage: segue sem salvar */ }
@@ -1067,7 +1415,7 @@ const Meta = {
   },
   save() {
     try {
-      localStorage.setItem('batalhaNaval.v1', JSON.stringify({ coins: this.coins, best: this.best, design: this.design, name: this.name, server: this.server, zoom: this.zoom, bots: this.bots }));
+      localStorage.setItem('batalhaNaval.v1', JSON.stringify({ coins: this.coins, best: this.best, design: this.design, name: this.name, server: this.server, zoom: this.zoom, bots: this.bots, map: this.map }));
     } catch (e) { /* ignore */ }
   },
 };
@@ -1248,6 +1596,7 @@ function drawFlame(ctx, code, cs, f, time) {
 /** peça montada por cima do casco. o: {ang, recoil} (ang relativo ao navio) */
 function drawTop(ctx, code, cs, o = {}) {
   const ang = o.ang || 0;
+  if (drawV19(ctx, code, cs, o)) return;
   switch (code) {
     case 'c': case 'd': {
       const dbl = code === 'd', bw = cs * 0.13;
@@ -1589,7 +1938,8 @@ function drawTop(ctx, code, cs, o = {}) {
 /* o servidor (Node) reaproveita as regras: peças, estatísticas, detecção e validação */
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { CREW, normalizeDesign, stripCrew, BOT_DIFFS, VERSION, DEEP, GRID_W, GRID_H, BASE_BUDGET, VISION_BASE, REVEAL_NEAR, PARTS, PRESETS, shipStats, designCells,
-    validateDesign, detects, isHull, isBridge, isFin, clamp };
+    validateDesign, detects, isHull, isBridge, isFin, clamp,
+    LOCKS, BIOMES, BIOME_KEYS, ISLAND_LEVELS, genMap, pickSpawn, zoneStep, routeLength, routeProject, routePoint, freeOfIslands, inIsland, CARGO_DESIGN, mulberry32 };
 }
 
 /** círculo de tripulação (canto da célula). Só o dono e os aliados veem; para o inimigo é invisível. */
@@ -1606,3 +1956,105 @@ function drawCrew(ctx, code, cs, active) {
   ctx.restore();
 }
 
+/** desenho das peças da v1.9 (famílias geradas). Devolve true se desenhou. */
+function drawV19(ctx, code, cs, o) {
+  const P = PARTS[code];
+  if (!P) return false;
+  const t = (o && o.time) || 0;
+  if (P.kind === 'missile' && P.lock) {
+    const L = LOCKS[P.lock], big = P.size === 'G', small = P.size === 'L';
+    rr(ctx, -cs * 0.42, -cs * 0.42, cs * 0.84, cs * 0.84, cs * 0.08);
+    ctx.fillStyle = '#2c3541'; ctx.fill(); ctx.strokeStyle = '#14181d'; ctx.lineWidth = 1.2; ctx.stroke();
+    const n = small ? 3 : big ? 1 : 2, w = cs * (big ? 0.24 : small ? 0.11 : 0.15), len = cs * (big ? 0.7 : small ? 0.52 : 0.6);
+    for (let i = 0; i < n; i++) {
+      const sx = n === 1 ? 0 : (i - (n - 1) / 2) * cs * (small ? 0.24 : 0.3);
+      ctx.fillStyle = '#d8dde3'; ctx.fillRect(sx - w / 2, -len / 2 + cs * 0.04, w, len);
+      ctx.fillStyle = L.col; ctx.fillRect(sx - w / 2, -len / 2 + cs * 0.04, w, len * 0.2);
+      poly(ctx, [[sx - w / 2, -len / 2 + cs * 0.04], [sx + w / 2, -len / 2 + cs * 0.04], [sx, -len / 2 - cs * 0.06]]); ctx.fillStyle = '#eef1f4'; ctx.fill();
+    }
+    ctx.strokeStyle = L.col; ctx.fillStyle = L.col; ctx.lineWidth = 1.4;
+    const cx = cs * 0.28, cy = cs * 0.3;
+    if (P.lock === 'radar') { ctx.beginPath(); ctx.arc(cx, cy, cs * 0.09, Math.PI, 0); ctx.stroke(); ctx.fillRect(cx - 0.8, cy, 1.6, cs * 0.06); }
+    else if (P.lock === 'heat') { poly(ctx, [[cx, cy - cs * 0.1], [cx + cs * 0.07, cy + cs * 0.06], [cx, cy + cs * 0.02], [cx - cs * 0.07, cy + cs * 0.06]]); ctx.fill(); }
+    else if (P.lock === 'gps') { ctx.beginPath(); ctx.arc(cx, cy, cs * 0.08, 0, TAU); ctx.moveTo(cx - cs * 0.12, cy); ctx.lineTo(cx + cs * 0.12, cy); ctx.moveTo(cx, cy - cs * 0.12); ctx.lineTo(cx, cy + cs * 0.12); ctx.stroke(); }
+    else { ctx.beginPath(); ctx.moveTo(cx, cy + cs * 0.08); ctx.lineTo(cx, cy - cs * 0.1); ctx.stroke(); ctx.beginPath(); ctx.arc(cx, cy - cs * 0.1, cs * 0.03 + (Math.sin(t * 6) > 0 ? 0.8 : 0), 0, TAU); ctx.fill(); }
+    return true;
+  }
+  if (P.kind === 'ballistic') {
+    const S = BALLISTIC_SIZES[P.size], r = cs * 0.46 * (0.85 + 0.15 * S.scale);
+    ctx.fillStyle = '#20252b'; ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.fill(); ctx.strokeStyle = '#0b0e11'; ctx.lineWidth = 1.6; ctx.stroke();
+    ctx.setLineDash([cs * 0.1, cs * 0.1]); ctx.strokeStyle = '#e3c25a'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(0, 0, r * 0.82, 0, TAU); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = '#3a4350'; ctx.beginPath(); ctx.arc(0, 0, r * 0.62, 0, TAU); ctx.fill();
+    ctx.strokeStyle = '#161a1f'; ctx.lineWidth = 1.3; ctx.beginPath(); ctx.moveTo(-r * 0.62, 0); ctx.lineTo(r * 0.62, 0); ctx.stroke();
+    const k = 0.1 + 0.07 * S.scale;
+    ctx.fillStyle = '#eef1f4'; ctx.beginPath(); ctx.arc(0, 0, cs * k, 0, TAU); ctx.fill();
+    ctx.fillStyle = '#c0392b'; ctx.beginPath(); ctx.arc(0, 0, cs * k * 0.5, 0, TAU); ctx.fill();
+    for (let i = 0; i < (P.size === 'S' ? 1 : P.size === 'M' ? 2 : 3); i++) { ctx.fillStyle = '#e3c25a'; ctx.fillRect(-r * 0.5 + i * cs * 0.1, r * 0.66, cs * 0.06, cs * 0.06); }
+    return true;
+  }
+  if (P.kind === 'flare') {
+    rr(ctx, -cs * 0.36, -cs * 0.28, cs * 0.72, cs * 0.56, cs * 0.06);
+    ctx.fillStyle = '#3a3226'; ctx.fill(); ctx.strokeStyle = '#14100a'; ctx.lineWidth = 1.2; ctx.stroke();
+    for (let i = -1; i <= 1; i++) {
+      ctx.save(); ctx.translate(i * cs * 0.2, 0); ctx.rotate(i * 0.35);
+      ctx.fillStyle = '#7a5a2a'; ctx.fillRect(-cs * 0.06, -cs * 0.3, cs * 0.12, cs * 0.34);
+      ctx.fillStyle = '#ffb347'; ctx.beginPath(); ctx.arc(0, -cs * 0.32, cs * 0.06, 0, TAU); ctx.fill();
+      ctx.restore();
+    }
+    ctx.fillStyle = '#ff7a1f'; ctx.fillRect(-cs * 0.28, cs * 0.14, cs * 0.56, cs * 0.05);
+    return true;
+  }
+  if (P.kind === 'hangar' && code !== 'I' && code !== 'O' && code !== 'P') {
+    ctx.fillStyle = '#262c33'; ctx.fillRect(-cs * 0.42, -cs * 0.42, cs * 0.84, cs * 0.84);
+    ctx.strokeStyle = '#e3c25a'; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.arc(0, 0, cs * 0.32, 0, TAU); ctx.stroke();
+    ctx.fillStyle = '#e3c25a'; ctx.fillRect(-cs * 0.14, -cs * 0.18, cs * 0.06, cs * 0.36); ctx.fillRect(cs * 0.08, -cs * 0.18, cs * 0.06, cs * 0.36); ctx.fillRect(-cs * 0.12, -cs * 0.03, cs * 0.24, cs * 0.06);
+    const col = { escort: '#7bd86a', bomber: '#ff6a5c', torpedo: '#4cc9ff', swarm: '#ffb347', aew: '#c18bff' }[P.drone] || '#fff';
+    ctx.fillStyle = o && o.out ? '#3a3f46' : col;
+    if (P.drone === 'swarm') for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.arc(cs * (0.22 + i * 0.1), -cs * 0.3, cs * 0.045, 0, TAU); ctx.fill(); }
+    else { ctx.beginPath(); ctx.arc(cs * 0.3, -cs * 0.3, cs * 0.09, 0, TAU); ctx.fill(); }
+    if (P.drone === 'aew' && !(o && o.out)) { ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(cs * 0.3, -cs * 0.3, cs * 0.15, 0, TAU); ctx.stroke(); }
+    if (o && o.out) { ctx.strokeStyle = 'rgba(227,194,90,.35)'; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.arc(0, 0, cs * 0.32, 0, TAU); ctx.stroke(); ctx.setLineDash([]); }
+    return true;
+  }
+  if (P.kind === 'plate' && P.layer === 'top' && /[φχψωΣ]/.test(code)) {
+    const h = cs * 0.44;
+    switch (code) {
+      case 'φ':
+        ctx.fillStyle = '#0f1318'; ctx.fillRect(-h, -h, h * 2, h * 2);
+        ctx.fillStyle = '#4a5463'; ctx.fillRect(-h + 2, -h + 2, h * 2 - 4, h * 2 - 4);
+        ctx.fillStyle = '#5d6a7c'; ctx.fillRect(-h + 5, -h + 5, h * 2 - 10, h * 2 - 10);
+        ctx.fillStyle = '#242c36'; ctx.fillRect(-1, -h + 3, 2, h * 2 - 6); ctx.fillRect(-h + 3, -1, h * 2 - 6, 2);
+        rivets(ctx, h - 3.5, Math.max(1.4, cs * 0.07), '#14181e');
+        break;
+      case 'χ':
+        ctx.fillStyle = '#6d6a63'; ctx.fillRect(-h, -h, h * 2, h * 2);
+        ctx.fillStyle = '#efe9db'; ctx.fillRect(-h + 1.5, -h + 1.5, h * 2 - 3, h * 2 - 3);
+        ctx.strokeStyle = 'rgba(120,110,95,.7)'; ctx.lineWidth = 1;
+        for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) ctx.strokeRect(-h + 3 + i * (h * 2 - 6) / 3, -h + 3 + j * (h * 2 - 6) / 3, (h * 2 - 6) / 3, (h * 2 - 6) / 3);
+        break;
+      case 'ψ': {
+        ctx.fillStyle = '#1b2733'; ctx.fillRect(-h, -h, h * 2, h * 2);
+        const g = ctx.createLinearGradient(-h, -h, h, h); g.addColorStop(0, '#d7e6f5'); g.addColorStop(0.5, '#8fb0cf'); g.addColorStop(1, '#c4d8ea');
+        ctx.fillStyle = g; ctx.fillRect(-h + 1.5, -h + 1.5, h * 2 - 3, h * 2 - 3);
+        ctx.strokeStyle = 'rgba(40,70,100,.5)'; ctx.lineWidth = 1;
+        poly(ctx, [0, 1, 2, 3, 4, 5].map(i => [Math.cos(i * TAU / 6 + 0.52) * h * 0.62, Math.sin(i * TAU / 6 + 0.52) * h * 0.62])); ctx.stroke();
+        break;
+      }
+      case 'ω':
+        ctx.fillStyle = '#3a1713'; ctx.fillRect(-h, -h, h * 2, h * 2);
+        ctx.fillStyle = '#8a4036'; ctx.fillRect(-h + 1.5, -h + 1.5, h * 2 - 3, h * 2 - 3);
+        ctx.fillStyle = '#ffb347'; poly(ctx, [[0, -cs * 0.22], [cs * 0.13, 0], [0, cs * 0.2], [-cs * 0.13, 0]]); ctx.fill();
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(0, 0, cs * 0.25, 0, TAU); ctx.moveTo(-cs * 0.18, cs * 0.18); ctx.lineTo(cs * 0.18, -cs * 0.18); ctx.stroke();
+        break;
+      case 'Σ':
+        ctx.fillStyle = '#3a2a14'; ctx.fillRect(-h, -h, h * 2, h * 2);
+        ctx.fillStyle = '#d6a34a'; ctx.fillRect(-h + 1.5, -h + 1.5, h * 2 - 3, h * 2 - 3);
+        ctx.strokeStyle = 'rgba(70,40,10,.65)'; ctx.lineWidth = 1.2;
+        for (let i = -1; i <= 1; i++) { ctx.beginPath(); ctx.moveTo(-h + 3, i * cs * 0.2); ctx.quadraticCurveTo(-h * 0.4, i * cs * 0.2 - 4, 0, i * cs * 0.2); ctx.quadraticCurveTo(h * 0.4, i * cs * 0.2 + 4, h - 3, i * cs * 0.2); ctx.stroke(); }
+        ctx.strokeStyle = '#7fd4ff'; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.moveTo(0, -cs * 0.3); ctx.lineTo(0, cs * 0.3); ctx.moveTo(-cs * 0.26, -cs * 0.15); ctx.lineTo(cs * 0.26, cs * 0.15); ctx.moveTo(cs * 0.26, -cs * 0.15); ctx.lineTo(-cs * 0.26, cs * 0.15); ctx.stroke();
+        break;
+    }
+    return true;
+  }
+  return false;
+}

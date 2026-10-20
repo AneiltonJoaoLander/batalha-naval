@@ -64,7 +64,7 @@ function renderStats(r) {
       ['🚀', s.torps, 'Torpedos'], ['🎇', s.missiles, 'Mísseis'], ['⚙', s.engines, 'Motores'],
       ['◣', s.lat, 'Aletas laterais'], ['▼', s.rear, 'Aletas traseiras'], ['✚', s.repairs, 'Reparos'],
       ['🛡', s.shields, 'Escudos'], ['📡', s.pd, 'Defesa pontual'], ['💨', s.thrusters, 'Propulsores laterais'],
-      ['🗡', s.melee, 'Armas corpo a corpo'], ['🛩', s.hangars, 'Hangares de drone'], ['🚰', s.pumps, 'Bombas de esgoto'], ['🧯', s.sprinklers, 'Anti-incêndio'], ['👥', s.crewCount, 'Grupos de tripulação'],
+      ['🗡', s.melee, 'Armas corpo a corpo'], ['🎯', s.ballistics, 'Mísseis balísticos'], ['✨', s.flares, 'Lançadores de flares'], ['🧱', s.plates, 'Placas de convés'], ['🛩', s.hangars, 'Hangares de drone'], ['🚰', s.pumps, 'Bombas de esgoto'], ['🧯', s.sprinklers, 'Anti-incêndio'], ['👥', s.crewCount, 'Grupos de tripulação'],
     ].filter(c => c[1] > 0).map(c => `<span title="${c[2]}">${c[0]} ${c[1]}</span>`).join('')}</div>`;
   $('messages').innerHTML =
     r.errors.map(m => `<div class="msg err">⛔ ${m}</div>`).join('') +
@@ -94,14 +94,19 @@ function openBots() {
   const B = Meta.bots, modal = $('modal-bots');
   const pool = PRESETS.map(p => ({ id: p.id, name: p.name, power: p.power })).concat([{ id: 'meu', name: 'Clone do meu navio', power: 0 }]);
   $('bots-diff').innerHTML = Object.keys(BOT_DIFFS).map(k => `<option value="${k}">${BOT_DIFFS[k].name}</option>`).join('');
+  $('bots-env').innerHTML = '<option value="rand">Aleatório</option>' + BIOME_KEYS.map(k => `<option value="${k}">${BIOMES[k].name}</option>`).join('');
+  $('bots-env').value = Meta.map.env; $('bots-isl').value = String(Meta.map.level); $('bots-mode').value = B.mode || ''; $('bots-allies').value = String(B.allies == null ? 2 : B.allies);
   $('bots-diff').value = B.diff; $('bots-mult').value = String(B.mult);
   $('bots-wave').innerHTML = Array.from({ length: 20 }, (_, i) => `<option value="${i + 1}">${i + 1}</option>`).join('');
   $('bots-wave').value = String(B.startWave);
   const showDesc = () => { $('bots-diff-desc').textContent = DIFF_DESC[B.diff] || ''; };
+  const MODE_DESC = { '': 'Escaramuça: você contra os bots escolhidos abaixo.', zone: 'Controle de Zona: segure as 3 zonas com seu time (você + aliados) para pontuar. Quem afunda renasce depois de alguns segundos.', convoy: 'Comboio: escolte o cargueiro (ele só anda com escolta por perto) até o destino. Se ele afundar, renasce no último ponto de controle; há 3 vidas.' };
   const sum = () => {
-    const tot = Object.values(B.skirmish).reduce((a, b) => a + b, 0);
-    $('bots-sum').textContent = tot ? `Escaramuça: ${tot} bot(s) · ${BOT_DIFFS[B.diff].name}` : 'Escaramuça: adicione ao menos 1 bot.';
-    $('bots-skirm-start').disabled = !tot;
+    const tot = Object.values(B.skirmish).reduce((a, b) => a + b, 0), md = B.mode || '';
+    $('bots-mode-desc').textContent = MODE_DESC[md];
+    $('bots-sum').textContent = md ? `${md === 'zone' ? 'Controle de Zona' : 'Comboio'}: ${tot ? tot + ' inimigo(s) escolhido(s)' : 'inimigos automáticos'} · ${B.allies} aliado(s) · ${BOT_DIFFS[B.diff].name}`
+      : (tot ? `Escaramuça: ${tot} bot(s) · ${BOT_DIFFS[B.diff].name}` : 'Escaramuça: adicione ao menos 1 bot.');
+    $('bots-skirm-start').disabled = !md && !tot;
   };
   const buildAllowed = () => {
     $('bots-allowed').innerHTML = pool.map(p => `<label class="chk"><input type="checkbox" data-id="${p.id}" ${!B.allowed || B.allowed.includes(p.id) ? 'checked' : ''}> ${p.name} ${p.power ? `<small>poder ${p.power}</small>` : ''}</label>`).join('');
@@ -119,6 +124,10 @@ function openBots() {
     });
   };
   $('bots-diff').onchange = () => { B.diff = $('bots-diff').value; Meta.save(); showDesc(); sum(); };
+  $('bots-env').onchange = () => { Meta.map.env = $('bots-env').value; Meta.save(); };
+  $('bots-isl').onchange = () => { Meta.map.level = +$('bots-isl').value; Meta.save(); };
+  $('bots-mode').onchange = () => { B.mode = $('bots-mode').value; Meta.save(); sum(); };
+  $('bots-allies').onchange = () => { B.allies = +$('bots-allies').value; Meta.save(); sum(); };
   $('bots-mult').onchange = () => { B.mult = +$('bots-mult').value; Meta.save(); };
   $('bots-wave').onchange = () => { B.startWave = +$('bots-wave').value; Meta.save(); };
   $('bots-all').onclick = () => { B.allowed = null; Meta.save(); buildAllowed(); };
@@ -128,7 +137,7 @@ function openBots() {
     const r = Builder.analyze();
     if (!r.ok) { alert('Corrija o navio antes de lutar:\n' + r.errors.join('\n')); return; }
     modal.classList.add('hidden'); UI.show('battle'); Touch.show(true);
-    Battle.start(Builder.getDesign(), 1, { counts: Object.assign({}, B.skirmish), diff: B.diff, wave: 6 });
+    Battle.start(Builder.getDesign(), 1, { counts: Object.assign({}, B.skirmish), diff: B.diff, wave: 6, mode: B.mode || '', allies: B.allies });
   };
   showDesc(); buildAllowed(); buildSkirm(); sum();
   modal.classList.remove('hidden');

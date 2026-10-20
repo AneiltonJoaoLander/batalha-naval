@@ -1,4 +1,4 @@
-# ⚓ Batalha Naval — v1.8.1
+# ⚓ Batalha Naval — v1.9
 
 Monte seu navio **peça por peça** numa grade (casco, armas, motores, aletas, sensores…) e lute contra ondas de inimigos
 ou contra outros jogadores **online**. Funciona no computador e no **celular** (instalável como app).
@@ -12,7 +12,7 @@ ou contra outros jogadores **online**. Funciona no computador e no **celular** (
 | **Online** | Direto pelo GitHub Pages, entre navegadores (P2P). Veja *Modo online*. |
 
 ### Controles
-- **Computador:** `W/S` acelera/ré · `A/D` gira · mouse mira · botão esquerdo = canhões, morteiros e cargas de profundidade · `Espaço`/botão direito = torpedos e mísseis · `V` mergulhar/emergir (submarino) · `F` minas · `−`/`+` ou roda do mouse = zoom · `P` pausa · `M` som.
+- **Computador:** `W/S` acelera/ré · `A/D` gira · mouse mira · botão esquerdo = canhões, morteiros e cargas de profundidade · `Espaço`/botão direito = torpedos e mísseis · `V` mergulhar/emergir (submarino) · `F` minas · `B` míssil balístico (marque o alvo clicando no **minimapa**) · `−`/`+` ou roda do mouse = zoom · `P` pausa · `M` som.
 - **Celular:** joystick esquerdo move (o navio aponta para onde você empurra) · joystick direito mira e atira (quanto mais longe, maior o alcance do morteiro) · botão 🚀 = torpedos/mísseis · ⬇ mergulhar e 💣 minas (aparecem só com as peças) · ❚❚ pausa. Gire para **paisagem**.
 
 ## O que tem
@@ -27,6 +27,14 @@ ou contra outros jogadores **online**. Funciona no computador e no **celular** (
   - **Fogo:** peças atingidas podem pegar fogo, que queima e se espalha; Sistema Anti-Incêndio e Bombeiros apagam. Munição em chamas pode explodir.
   - **Drones:** Hangares de Reconhecimento (ampliam a visão, seguem a mira), Ataque (bombardeiam inimigos detectados) e Suicida (`Espaço`/botão direito). Metralhadoras e defesa pontual os derrubam; hangar vazio demora para relançar.
   - **Tripulação:** círculos invisíveis para o inimigo (Artilheiros, Maquinistas, Equipe de Avarias, Bombeiros, Timoneiros, Operadores de Sensores, Fuzileiros). Se a peça sob o grupo for danificada ou destruída, o navio perde aquela função.
+- **Mísseis, drones, mapas e novos modos (v1.9):**
+  - **Mísseis de cruzeiro antinavio** em 3 tamanhos (leve, médio, pesado) e 4 *locks*: **radar** (trava no alvo detectado), **térmico** (persegue o motor mais potente; motor elétrico é frio), **GPS** (voa até o cursor, sem precisar ver o alvo; alcance maior) e **teleguiado** (segue o cursor enquanto voa).
+  - **Mísseis balísticos** (pequeno, médio, grande): marque uma região no **minimapa** (clique/toque) e lance com `B` (ou o botão 🎯). Voam em arco, nada os intercepta, e o inimigo vê o alerta com contagem regressiva.
+  - **Flares** enganam os mísseis térmicos; o **Bloqueador** continua valendo contra radar e teleguiado.
+  - **Metralhadoras atacam drones** (com antecipação), e há 5 drones novos: Escolta, Bombardeiro, Torpedeiro, Enxame e Radar (AEW).
+  - **Mais placas de convés:** Pesada, Cerâmica, Titânio, Corta-fogo e Isolante Térmica (esconde o calor dos motores vizinhos).
+  - **Ilhas** (terra invencível: navios batem e tiros diretos param; morteiros, balísticos e drones passam por cima) e **7 ambientes**: mar aberto, arquipélago tropical, ártico, tempestade, nevoeiro, noite e costa vulcânica (alguns reduzem a visão).
+  - **Modos de partida** (online e contra bots): **Controle de Zona** (segure 3 zonas para pontuar) e **Comboio** (a equipe A escolta o cargueiro até o destino; a B tenta afundá-lo; ele renasce no último ponto de controle até acabarem as vidas).
 - **Bots configuráveis (v1.6):** dificuldade, quantidade, modelos permitidos, *escaramuça* offline e **bots nas salas online** (o anfitrião adiciona; rodam no navegador dele).
 - **Zoom (v1.6):** ⚙ Opções (35%–160%) ou roda do mouse / `−` `+` na batalha.
 - **Visão e furtividade (v1.5):**

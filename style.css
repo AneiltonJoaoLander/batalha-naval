@@ -100,7 +100,7 @@ body { background: radial-gradient(1200px 700px at 50% -10%, #17406a 0%, var(--b
 .bar-row .bar div.green { background: #7bd86a; } .bar-row .bar div.cyan { background: #4cc9ff; }
 .speed { font-size: .8rem; color: var(--muted); }
 .speed b { color: var(--text); }
-#minimap { position: absolute; right: 14px; bottom: 44px; border-radius: 10px; border: 1px solid var(--line); pointer-events: none; }
+#minimap { position: absolute; right: 14px; bottom: 44px; border-radius: 10px; border: 1px solid var(--line); pointer-events: auto; cursor: crosshair; touch-action: none; }
 .help { position: absolute; left: 0; right: 0; bottom: 8px; text-align: center; font-size: .78rem; color: rgba(255,255,255,.7); pointer-events: none; text-shadow: 0 1px 3px #000; }
 .help b { color: var(--accent); }
 
@@ -267,3 +267,10 @@ body.touch .host-btn { left: 62px; top: 10px; }
 .crew-line:empty { display: none; }
 .crew-chip { background: rgba(18,28,40,.85); border: 1px solid var(--line); border-radius: 10px; padding: 1px 7px; font-size: .75rem; }
 .crew-chip.off { border-color: #8a4a4a; color: #ffb0a0; opacity: .8; }
+
+/* v1.9: objetivos, balístico e mapa */
+.pill.obj { display: none; font-weight: 700; color: var(--accent); }
+#screen-battle.objmode .pill.obj { display: block; }
+#screen-battle.objmode .camp { display: none; }
+#touch .tbtn.ball { right: calc(122px + env(safe-area-inset-right)); bottom: calc(262px + env(safe-area-inset-bottom)); background: rgba(255,214,102,.22); border-color: rgba(255,214,102,.8); }
+#touch .tbtn.ball.hidden { display: none; }

@@ -9,7 +9,7 @@ const Touch = {
   enabled: false, root: null,
   move: { x: 0, y: 0, m: 0, id: null },
   aim: { x: 0, y: -1, m: 0, id: null, last: { x: 0, y: -1 }, dist: 450, used: false },
-  torp: false, aux: false,
+  torp: false, aux: false, ball: false,
 
   init() {
     this.enabled = ('ontouchstart' in window) || navigator.maxTouchPoints > 0 || (window.matchMedia && matchMedia('(pointer: coarse)').matches);
@@ -47,6 +47,10 @@ const Touch = {
     ax.addEventListener('pointerdown', e => { e.preventDefault(); this.aux = true; ax.classList.add('on'); });
     const offAux = () => { this.aux = false; ax.classList.remove('on'); };
     ax.addEventListener('pointerup', offAux); ax.addEventListener('pointercancel', offAux); ax.addEventListener('pointerleave', offAux);
+    const bl = document.getElementById('tbtn-ball');
+    bl.addEventListener('pointerdown', e => { e.preventDefault(); this.ball = true; bl.classList.add('on'); SFX.init(); });
+    const offBall = () => { this.ball = false; bl.classList.remove('on'); };
+    bl.addEventListener('pointerup', offBall); bl.addEventListener('pointercancel', offBall); bl.addEventListener('pointerleave', offBall);
     document.getElementById('tbtn-pause').addEventListener('click', () => Battle.togglePause());
     document.addEventListener('gesturestart', e => e.preventDefault());      // sem zoom por pinça
   },
@@ -55,7 +59,7 @@ const Touch = {
   show(on) {
     if (!this.enabled || !this.root) return;
     this.root.classList.toggle('hidden', !on);
-    this.move.id = this.aim.id = null; this.move.m = this.aim.m = 0; this.torp = false; this.aux = false;
+    this.move.id = this.aim.id = null; this.move.m = this.aim.m = 0; this.torp = false; this.aux = false; this.ball = false;
     if (on) {
       try {
         const el = document.documentElement;

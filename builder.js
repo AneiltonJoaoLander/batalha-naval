@@ -323,7 +323,7 @@ const Builder = (() => {
     document.getElementById('chk-sym').onchange = e => { symmetry = e.target.checked; render(); };
     document.getElementById('chk-free').onchange = e => { freeMode = e.target.checked; changed(); };
     document.getElementById('btn-export').onclick = () => {
-      const code = btoa(JSON.stringify(design));
+      const code = btoa(unescape(encodeURIComponent(JSON.stringify(design))));      // UTF-8 seguro (peças com letras gregas)
       if (navigator.clipboard) navigator.clipboard.writeText(code).then(() => alert('Código do navio copiado! Guarde ou envie para um amigo.'), () => prompt('Copie o código:', code));
       else prompt('Copie o código:', code);
     };
@@ -331,7 +331,8 @@ const Builder = (() => {
       const code = prompt('Cole o código de um navio:');
       if (!code) return;
       try {
-        const d = JSON.parse(atob(code.trim()));
+        const raw = atob(code.trim());
+        let d; try { d = JSON.parse(decodeURIComponent(escape(raw))); } catch (e2) { d = JSON.parse(raw); }       // códigos antigos eram ASCII puro
         if (!d.hull || !d.top || d.hull.length !== GRID_H || d.hull[0].length !== GRID_W) throw new Error();
         pushUndo(); design = normalizeDesign(d); sanitize(design); changed();
       } catch (e) { alert('Código inválido.'); }

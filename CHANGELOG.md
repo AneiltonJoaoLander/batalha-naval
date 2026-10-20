@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.9.0 — mísseis, balísticos, drones, ilhas e novos modos
+**Armas**
+- **Mísseis de cruzeiro antinavio:** leve / médio / pesado × lock **radar**, **térmico**, **GPS** e **teleguiado** (12 modelos). O térmico mira no motor mais potente do alvo; o GPS vai às coordenadas do cursor; o teleguiado segue o cursor.
+- **Mísseis balísticos** (pequeno, médio, grande): clique no **minimapa** para marcar a região e lance com **B** (ou o botão 🎯 no celular). Arco longo, imunes a defesa pontual e bloqueador; o inimigo recebe o alerta com contagem regressiva e a área de impacto.
+- **Lançador de Flares:** isca os mísseis térmicos. Bloqueador e defesa pontual passam a ser agrupados em *Contramedidas*.
+- **Metralhadoras agora atacam drones** (têm prioridade e antecipam o movimento).
+- **5 drones novos:** Escolta (metralhadora), Bombardeiro, Torpedeiro, Enxame (3 mini-drones suicidas) e Radar AEW (visão 720).
+- **5 placas de convés novas:** Pesada, Cerâmica, Titânio, Corta-fogo e Isolante Térmica.
+- 3 modelos novos: **Fragata Lança-mísseis**, **Defesa Aérea** e **Cruzador Balístico**.
+
+**Mapas**
+- **Ilhas** invencíveis (poucas, normais ou muitas): navios colidem, tiros diretos e torpedos param, bots desviam; morteiros, balísticos e drones passam por cima.
+- **7 ambientes:** mar aberto, arquipélago tropical, ártico, tempestade (chuva e raios), nevoeiro, noite e costa vulcânica, com efeitos na visão. Escolha no 🤖 Bots (campanha/offline) ou nas regras da sala (online); a semente é sorteada pelo anfitrião e todos veem o mesmo mapa.
+
+**Modos de partida** (online e contra bots, com equipes)
+- **Controle de Zona:** 3 zonas de captura; cada zona dominada rende 1 ponto por segundo. Primeiro a atingir a meta (ou quem lidera no fim do tempo) vence.
+- **Comboio:** a equipe A escolta um cargueiro (só anda com escolta por perto) até o destino; a equipe B ataca. Se o cargueiro afundar, **renasce** no último ponto de controle (vidas configuráveis).
+- Contra bots há aliados configuráveis e renascimento automático.
+
+**Outros**
+- Colisões levam em conta a massa dos navios (o mais pesado é empurrado menos).
+- Código do navio (copiar/colar) agora é seguro para as novas peças (UTF-8).
+- Servidor: valida mísseis/balísticos pelo projeto, repassa o alerta balístico a todos e limita drones a 750 de visão.
+
 ## v1.8.1 — correção
 - **Corrigido:** no modo online sem servidor, o anfitrião não conseguia iniciar a partida quando havia outro jogador humano na sala (a função que esconde a tripulação inimiga não existia no navegador). Partidas só com bots já funcionavam.
 

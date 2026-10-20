@@ -51,6 +51,8 @@ const Online = {
     $('on-start').onclick = () => this.send({ t: 'start' });
     $('on-leave').onclick = () => this.leaveRoom();
     $('on-copy').onclick = () => this.copyLink();
+    const envOpts = '<option value="rand">Aleatório</option>' + BIOME_KEYS.map(k => `<option value="${k}">${BIOMES[k].name}</option>`).join('');
+    $('cr-env').innerHTML = envOpts; $('lb-env').innerHTML = envOpts;
     const sel = $('ba-model');
     sel.innerHTML = PRESETS.map(p => `<option value="${p.id}">${esc(p.name)} (poder ${p.power})</option>`).join('') + '<option value="meu">Clone do meu navio</option>';
     $('ba-diff').innerHTML = Object.keys(BOT_DIFFS).map(k => `<option value="${k}">${BOT_DIFFS[k].name}</option>`).join('');
@@ -60,7 +62,7 @@ const Online = {
       if (sel.value === 'meu') m.design = Builder.getDesign();
       this.send(m);
     };
-    for (const id of ['lb-mode', 'lb-budget', 'lb-kills', 'lb-min', 'lb-max', 'lb-resp', 'lb-arena', 'lb-fog', 'lb-ff', 'lb-sub', 'lb-stealth', 'lb-guided', 'lb-lock'])
+    for (const id of ['lb-mode', 'lb-budget', 'lb-kills', 'lb-min', 'lb-max', 'lb-resp', 'lb-arena', 'lb-fog', 'lb-ff', 'lb-sub', 'lb-stealth', 'lb-guided', 'lb-lock', 'lb-env', 'lb-isl', 'lb-score', 'lb-lives'])
       $(id).onchange = () => this.send({ t: 'settings', settings: this.formSettings('lb') });
     $('lb-pass').onchange = () => this.send({ t: 'settings', settings: Object.assign(this.formSettings('lb'), { pass: $('lb-pass').value.trim(), setPass: true }) });
     $('ht-fill').onclick = () => this.send({ t: 'fillBots', n: 8, diff: $('ba-diff').value });
@@ -77,7 +79,8 @@ const Online = {
     const o = { mode: $('mode').value, budget: +$('budget').value, killLimit: +$('kills').value, minutes: +$('min').value };
     const num = (id, key) => { const e = $(id); if (e) o[key] = +e.value; };
     const chk = (id, key) => { const e = $(id); if (e) o[key] = e.checked; };
-    num('max', 'maxPlayers'); num('resp', 'respawn'); num('arena', 'arena');
+    num('max', 'maxPlayers'); num('resp', 'respawn'); num('arena', 'arena'); num('isl', 'islands'); num('score', 'scoreLimit'); num('lives', 'cargoLives');
+    { const e = $('env'); if (e) o.env = e.value; }
     chk('fog', 'fog'); chk('ff', 'ff'); chk('sub', 'allowSub'); chk('stealth', 'allowStealth'); chk('guided', 'allowGuided'); chk('lock', 'locked');
     const pw = $('pass'); if (pw && p === 'cr') o.pass = pw.value.trim();             // no lobby a senha tem campo/evento próprio
     return o;
@@ -114,16 +117,18 @@ const Online = {
   renderLobby() {
     const $ = id => document.getElementById(id), r = this.room, host = this.isHost(), me = this.me();
     $('lobby-code').textContent = r.code;
-    const S = r.settings, teams = S.mode === 'teams';
+    const S = r.settings, teams = S.mode !== 'ffa', om = S.mode === 'zone' || S.mode === 'convoy';
     $('lb-mode').value = S.mode; $('lb-budget').value = S.budget; $('lb-kills').value = S.killLimit; $('lb-min').value = S.minutes;
     $('lb-max').value = S.maxPlayers; $('lb-resp').value = S.respawn; $('lb-arena').value = S.arena;
+    $('lb-env').value = S.env || 'rand'; $('lb-isl').value = String(S.islands == null ? 2 : S.islands); $('lb-score').value = String(S.scoreLimit || 300); $('lb-lives').value = String(S.cargoLives || 3);
+    $('lb-score-wrap').style.display = S.mode === 'zone' ? '' : 'none'; $('lb-lives-wrap').style.display = S.mode === 'convoy' ? '' : 'none'; $('lb-kills-wrap').style.display = om ? 'none' : '';
     $('lb-fog').checked = S.fog !== false; $('lb-ff').checked = !!S.ff; $('lb-sub').checked = S.allowSub !== false;
     $('lb-stealth').checked = S.allowStealth !== false; $('lb-guided').checked = S.allowGuided !== false; $('lb-lock').checked = !!S.locked;
     if (document.activeElement !== $('lb-pass')) $('lb-pass').value = '';
     $('lb-pass').placeholder = S.hasPass ? '(senha definida — digite para trocar)' : 'sem senha';
-    for (const id of ['lb-mode', 'lb-budget', 'lb-kills', 'lb-min', 'lb-max', 'lb-resp', 'lb-arena', 'lb-fog', 'lb-ff', 'lb-sub', 'lb-stealth', 'lb-guided', 'lb-lock', 'lb-pass']) $(id).disabled = !host;
+    for (const id of ['lb-mode', 'lb-budget', 'lb-kills', 'lb-min', 'lb-max', 'lb-resp', 'lb-arena', 'lb-fog', 'lb-ff', 'lb-sub', 'lb-stealth', 'lb-guided', 'lb-lock', 'lb-pass', 'lb-env', 'lb-isl', 'lb-score', 'lb-lives']) $(id).disabled = !host;
     $('lb-ff').disabled = !host || !teams;
-    $('lobby-flags').textContent = [S.locked ? '🔒 sala trancada' : '', S.hasPass ? '🔑 com senha' : '', S.fog === false ? '👁 sem névoa' : '', S.ff ? '💥 fogo amigo' : '',
+    $('lobby-flags').textContent = [S.mode === 'zone' ? '🏁 Controle de Zona' : S.mode === 'convoy' ? '🚢 Comboio (A defende, B ataca)' : '', '🗺 ' + (S.env === 'rand' || !BIOMES[S.env] ? 'ambiente aleatório' : BIOMES[S.env].name), S.locked ? '🔒 sala trancada' : '', S.hasPass ? '🔑 com senha' : '', S.fog === false ? '👁 sem névoa' : '', S.ff ? '💥 fogo amigo' : '',
       S.allowSub === false ? '🚫 submarinos' : '', S.allowStealth === false ? '🚫 furtivo' : '', S.allowGuided === false ? '🚫 guiadas' : ''].filter(Boolean).join(' · ');
     $('lobby-players').innerHTML = r.players.map(p => {
       const isHostRow = p.id === r.host;
@@ -159,7 +164,7 @@ const Online = {
   renderRooms(list) {
     const el = document.getElementById('on-rooms');
     el.innerHTML = list.length ? list.map(x => `<button class="room-row" data-code="${x.code}">
-        <b>${x.code}</b> <span>${esc(x.host)}</span> <small>${x.n}/8 · ${x.settings.mode === 'teams' ? 'equipes' : 'todos contra todos'} · 🪙${x.settings.budget || '∞'} · ${x.settings.killLimit} abates</small></button>`).join('')
+        <b>${x.code}</b> <span>${esc(x.host)}</span> <small>${x.n}/8 · ${({ teams: 'equipes', zone: 'controle de zona', convoy: 'comboio' })[x.settings.mode] || 'todos contra todos'} · 🪙${x.settings.budget || '∞'} · ${x.settings.killLimit} abates</small></button>`).join('')
       : '<p class="muted">Nenhuma sala aberta. Crie a sua!</p>';
     el.querySelectorAll('.room-row').forEach(b => b.onclick = () => this.send({ t: 'join', code: b.dataset.code }));
   },
@@ -347,7 +352,10 @@ const Online = {
         else if (Battle.localIds.has(m.id)) Battle.respawnBot(m.id, m.x, m.y, m.a);
         else Battle.remoteSpawn(m.id, m.x, m.y, m.a);
         break;
-      case 'score': this.scores = m.list; this.teams = m.teams; this.left = m.left; this.renderScore(); break;
+      case 'score':
+        this.scores = m.list; this.teams = m.teams; this.left = m.left;
+        if (m.obj) { this.objState = m.obj.mode === 'zone' ? { mode: 'zone', z: m.obj.z.map(a => ({ cap: a[0], owner: a[1], contested: !!a[2] })), sc: m.obj.sc, lim: m.obj.lim } : m.obj; Battle.objState = this.objState; }
+        this.renderScore(); break;
       case 'end': this.onEnd(m); break;
     }
   },
@@ -356,14 +364,17 @@ const Online = {
   beginMatch(m) {
     const me = m.players.find(p => p.id === m.you);
     if (!me) return;
-    this.inMatch = true; this.cfg = { me, players: m.players, spawns: m.spawns, spawn: m.spawns[m.you], settings: m.settings };
+    this.inMatch = true; this.objState = null; this.cfg = { me, players: m.players, spawns: m.spawns, spawn: m.spawns[m.you], settings: m.settings, map: m.map || { seed: 1, env: 'oceano', level: 0 } };
     this.scores = []; this.teams = {}; this.left = m.endsAt ? Math.round((m.endsAt - Date.now()) / 1000) : -1; this.feed = []; this.snapT = 0; this.snapN = 0;
     UI.hideOverlay(); UI.show('battle'); Touch.show(true);
     document.getElementById('online-hud').classList.remove('hidden');
     this.notice(''); document.getElementById('feed').innerHTML = ''; this.paused = false;
     document.getElementById('host-btn').classList.toggle('hidden', !this.isHost());
     Battle.startOnline(this.cfg);
-    UI.banner(m.settings.mode === 'teams' ? 'EQUIPES' : 'TODOS CONTRA TODOS', 'Primeiro a ' + m.settings.killLimit + ' abates' + (m.settings.minutes ? ' · ' + m.settings.minutes + ' min' : ''));
+    const md = m.settings.mode, tm = m.settings.minutes ? ' · ' + m.settings.minutes + ' min' : '';
+    if (md === 'zone') UI.banner('CONTROLE DE ZONA', 'Segure as zonas · primeiro a ' + m.settings.scoreLimit + ' pontos' + tm);
+    else if (md === 'convoy') UI.banner('COMBOIO', (me.team === 'A' ? 'Equipe A: escolte o cargueiro até o destino' : 'Equipe B: afunde o cargueiro (ele renasce)') + tm);
+    else UI.banner(md === 'teams' ? 'EQUIPES' : 'TODOS CONTRA TODOS', 'Primeiro a ' + m.settings.killLimit + ' abates' + tm + ' · ' + (BIOMES[m.map.env] || BIOMES.oceano).name);
     this.renderScore();
   },
 
@@ -400,8 +411,16 @@ const Online = {
     return m;
   },
 
+  /** texto do objetivo no HUD (zonas / comboio) */
+  objText() {
+    const o = this.objState, me = Battle.player ? Battle.player.team : '';
+    if (!o) return '';
+    if (o.mode === 'zone') { const mine = o.sc[me] || 0, foe = o.sc[me === 'A' ? 'B' : 'A'] || 0; return '🏁 Zonas · sua equipe ' + mine + ' × ' + foe + ' · meta ' + o.lim; }
+    return '🚢 Comboio ' + Math.round((o.prog || 0) * 100) + '% · ❤ ' + o.lives + (o.alive ? '' : ' · cargueiro afundado');
+  },
+
   sendShot(s, as) {
-    this.send({ t: 'shot', as: as || undefined, kind: s.kind, id: s.id, x: +s.x.toFixed(1), y: +s.y.toFixed(1), vx: +(s.vx || 0).toFixed(1), vy: +(s.vy || 0).toFixed(1),
+    this.send({ t: 'shot', as: as || undefined, lk: s.lock || '', sz: s.size || '', gx: Math.round(s.gx || 0), gy: Math.round(s.gy || 0), kind: s.kind, id: s.id, x: +s.x.toFixed(1), y: +s.y.toFixed(1), vx: +(s.vx || 0).toFixed(1), vy: +(s.vy || 0).toFixed(1),
       life: +s.life.toFixed(2), dmg: s.dmg, pierce: s.pierce || 0, big: !!s.big, splash: s.splash || 0, turn: s.turn || 0, ang: s.ang || 0, speed: s.speed || 0,
       tx: s.tx || 0, ty: s.ty || 0, T: s.T || 0, x0: s.x0 || 0, y0: s.y0 || 0, fuse: s.fuse || 0, dmgSurf: s.dmgSurf || 0, arm: s.arm || 0, tg: s.target ? s.target.id : '' });
   },
@@ -441,7 +460,7 @@ const Online = {
         <div class="hp-row">
           <label>Abates p/ vencer <select id="hp-kills">${opts([5, 10, 15, 20, 30, 50], S.killLimit)}</select></label>
           <label>Reaparecer em <select id="hp-resp">${opts([1, 3, 5, 8, 12, 15], S.respawn, v => v + ' s')}</select></label>
-          ${S.mode === 'teams' ? `<label class="check"><input type="checkbox" id="hp-ff" ${S.ff ? 'checked' : ''}> Fogo amigo</label>` : ''}</div>
+          ${S.mode !== 'ffa' ? `<label class="check"><input type="checkbox" id="hp-ff" ${S.ff ? 'checked' : ''}> Fogo amigo</label>` : ''}</div>
         <h3>Anunciar a todos</h3>
         <div class="hp-row"><input type="text" id="hp-say" maxlength="90" placeholder="mensagem"><button class="btn" id="hp-send">Enviar</button></div>
         <h3>Jogadores</h3>
@@ -467,10 +486,10 @@ const Online = {
     const el = document.getElementById('scoreboard');
     if (!el || !this.cfg) return;
     const mm = this.left >= 0 ? `${Math.floor(this.left / 60)}:${String(this.left % 60).padStart(2, '0')}` : '∞';
-    const teams = this.cfg.settings.mode === 'teams' ? Object.keys(this.teams).sort().map(t => `<span class="team t${t}">${t}: ${this.teams[t]}</span>`).join(' ') : '';
+    const teams = this.cfg.settings.mode !== 'ffa' ? Object.keys(this.teams).sort().map(t => `<span class="team t${t}">${t}: ${this.teams[t]}</span>`).join(' ') : '';
     const list = this.scores.length ? this.scores : this.cfg.players.map(p => ({ id: p.id, name: p.name, team: p.team, kills: 0, deaths: 0 }));
-    el.innerHTML = `<div class="sb-head"><span>⏱ ${mm}</span><span>até ${this.cfg.settings.killLimit}</span>${teams}</div>` +
-      list.map(p => `<div class="sb-row ${p.id === this.id ? 'me' : ''}"><span class="n">${this.cfg.settings.mode === 'teams' ? `<i class="dot t${p.team}"></i>` : ''}${esc(p.name)}</span><b>${p.kills}</b><small>/${p.deaths}</small></div>`).join('');
+    el.innerHTML = `<div class="sb-head"><span>⏱ ${mm}</span><span>${this.cfg.settings.mode === 'zone' || this.cfg.settings.mode === 'convoy' ? '' : 'até ' + this.cfg.settings.killLimit}</span>${teams}</div>` +
+      list.map(p => `<div class="sb-row ${p.id === this.id ? 'me' : ''}"><span class="n">${this.cfg.settings.mode !== 'ffa' ? `<i class="dot t${p.team}"></i>` : ''}${esc(p.name)}</span><b>${p.kills}</b><small>/${p.deaths}</small></div>`).join('');
   },
 
   onEnd(m) {

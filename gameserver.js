@@ -12,12 +12,14 @@
 (function (root) {
 const G = (typeof module !== 'undefined' && module.exports)
   ? require('./parts.js')
-  : { VERSION, DEEP, PRESETS, validateDesign, detects, stripCrew };                     // globais de parts.js no navegador
+  : { VERSION, DEEP, PRESETS, validateDesign, detects, stripCrew, BIOME_KEYS, genMap, pickSpawn, zoneStep, routeLength, routeProject, routePoint, CARGO_DESIGN };     // globais de parts.js no navegador
 
 const MAX_PLAYERS = 8;
 const MAX_ROOMS = 60;
-const SHOT_KINDS = new Set(['shell', 'bullet', 'heavy', 'flame', 'rail', 'mortar', 'torp', 'missile', 'mine', 'depth']);
-const LOUD_SHOTS = new Set(['shell', 'rail', 'mortar', 'torp', 'missile']);   // revelam quem atira
+const SHOT_KINDS = new Set(['shell', 'bullet', 'heavy', 'flame', 'rail', 'mortar', 'torp', 'missile', 'mine', 'depth', 'ballistic']);
+const LOUD_SHOTS = new Set(['shell', 'rail', 'mortar', 'torp', 'missile', 'ballistic']);
+const DRONE_KINDS = ['recon', 'attack', 'kamikaze', 'escort', 'bomber', 'torpedo', 'swarm', 'aew'];
+const LOCK_KINDS = ['radar', 'heat', 'gps', 'tele'];   // revelam quem atira
 
 function createGameServer() {
 const rooms = new Map();
@@ -46,7 +48,7 @@ function cleanSettings(s, old, minPlayers = 2) {
   const pick = (v, list, d) => list.includes(+v) ? +v : d;
   const bool = (v, d) => v === undefined ? d : !!v;
   return {
-    mode: s.mode === 'teams' ? 'teams' : (s.mode === 'ffa' ? 'ffa' : (o.mode || 'ffa')),
+    mode: ['ffa', 'teams', 'zone', 'convoy'].includes(s.mode) ? s.mode : (o.mode || 'ffa'),
     budget: pick(s.budget, [0, 200, 300, 450, 700, 1000, 1500], o.budget !== undefined ? o.budget : 450),
     killLimit: pick(s.killLimit, [5, 10, 15, 20, 30, 50], o.killLimit || 15),
     minutes: pick(s.minutes, [0, 5, 10, 15, 20], o.minutes !== undefined ? o.minutes : 10),
@@ -58,15 +60,24 @@ function cleanSettings(s, old, minPlayers = 2) {
     allowSub: bool(s.allowSub, o.allowSub !== undefined ? o.allowSub : true),
     allowStealth: bool(s.allowStealth, o.allowStealth !== undefined ? o.allowStealth : true),
     allowGuided: bool(s.allowGuided, o.allowGuided !== undefined ? o.allowGuided : true),
+    env: (s.env === 'rand' || G.BIOME_KEYS.includes(s.env)) ? s.env : (o.env || 'rand'),
+    islands: pick(s.islands, [0, 1, 2, 3], o.islands !== undefined ? o.islands : 2),
+    scoreLimit: pick(s.scoreLimit, [100, 200, 300, 500], o.scoreLimit || 300),
+    cargoLives: pick(s.cargoLives, [2, 3, 5, 8], o.cargoLives || 3),
     locked: bool(s.locked, !!o.locked),
     pass: (s.setPass || !old) && typeof s.pass === 'string' ? clean(s.pass, 8) : (o.pass || ''),   // só muda se pedirem (evita apagar a senha ao mexer em outra regra)
   };
 }
 const halfOf = r => (r.settings.arena || 3600) / 2;
+const teamMode = r => r.settings.mode !== 'ffa';
+const objMode = r => (r.settings.mode === 'zone' || r.settings.mode === 'convoy') ? r.settings.mode : '';
 
 function assignTeams(r) {
   let i = 0;
-  for (const p of r.players.values()) { p.team = r.settings.mode === 'teams' ? (p.teamPref || (i % 2 ? 'B' : 'A')) : 'p' + p.id; i++; }
+  for (const p of r.players.values()) {
+    if (p.cargo) { p.team = 'A'; continue; }
+    p.team = teamMode(r) ? (p.teamPref || (i % 2 ? 'B' : 'A')) : 'p' + p.id; i++;
+  }
 }
 
 function roomInfo(r) {
@@ -74,7 +85,7 @@ function roomInfo(r) {
     code: r.code, host: r.hostId, state: r.state, paused: !!r.paused,
     settings: Object.assign({}, r.settings, { pass: undefined, hasPass: !!r.settings.pass }),
     endsAt: r.endsAt || 0,
-    players: [...r.players.values()].map(p => ({
+    players: [...r.players.values()].filter(p => !p.cargo).map(p => ({
       id: p.id, name: p.name, team: p.team, ready: p.ready, cost: p.stats ? p.stats.cost : 0, hasDesign: !!p.design,
       kills: p.kills, deaths: p.deaths, bot: !!p.isBot, diff: p.diff || '', owner: p.owner || '',
     })),
@@ -84,10 +95,10 @@ const broadcast = (r, obj, except) => { const s = JSON.stringify(obj); for (cons
 const broadcastRoom = r => broadcast(r, { t: 'room', room: roomInfo(r) });
 
 function scoreboard(r) {
-  const list = [...r.players.values()].map(p => ({ id: p.id, name: p.name, team: p.team, kills: p.kills, deaths: p.deaths }));
+  const list = [...r.players.values()].filter(p => !p.cargo).map(p => ({ id: p.id, name: p.name, team: p.team, kills: p.kills, deaths: p.deaths }));
   list.sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
   const teams = {};
-  if (r.settings.mode === 'teams') for (const p of list) teams[p.team] = (teams[p.team] || 0) + p.kills;
+  if (teamMode(r)) for (const p of list) teams[p.team] = (teams[p.team] || 0) + p.kills;
   return { list, teams };
 }
 
@@ -112,16 +123,10 @@ function canSee(r, q, p, now) {
 }
 
 function spawnPoint(r, self) {
-  let best = null, bd = -1;
-  for (let k = 0; k < 24; k++) {
-    const H = halfOf(r), a = rnd(0, Math.PI * 2), d = rnd(H * 0.5, H * 0.8);
-    const x = Math.sin(a) * d, y = -Math.cos(a) * d;
-    let md = 1e9;
-    for (const o of r.players.values()) if (o !== self && o.alive) md = Math.min(md, Math.hypot(o.x - x, o.y - y));
-    if (md > bd) { bd = md; best = { x, y }; }
-    if (md > halfOf(r) * 0.5) break;
-  }
-  return { x: Math.round(best.x), y: Math.round(best.y), a: +Math.atan2(-best.x, best.y).toFixed(3) };
+  const avoid = [];
+  for (const o of r.players.values()) if (o !== self && o.alive) avoid.push([o.x, o.y]);
+  const sp = G.pickSpawn(r.map, objMode(r) ? self.team : '', Math.random, avoid);       // longe das ilhas; modos com objetivo: cada equipe num lado
+  return { x: sp.x, y: sp.y, a: sp.a };
 }
 
 /* ------------------------------------------------------------------ salas */
@@ -137,7 +142,8 @@ function leaveRoom(p) {
   assignTeams(r);
   broadcast(r, { t: 'left', id: p.id });
   broadcastRoom(r);
-  if (r.state === 'playing' && humans.length < 1 || (r.state === 'playing' && r.players.size < 2)) endMatch(r, 'Os outros jogadores saíram.');
+  const real = [...r.players.values()].filter(q => !q.cargo).length;
+  if (r.state === 'playing' && (humans.length < 1 || real < 2)) endMatch(r, 'Os outros jogadores saíram.');
 }
 
 function joinRoom(p, r, pass, asHost) {
@@ -166,21 +172,33 @@ function createRoom(p, settings, wantedCode) {
 }
 
 function startMatch(r) {
-  const now = Date.now();
+  const now = Date.now(), S = r.settings, om = objMode(r);
   r.state = 'playing'; r.startedAt = now; r.paused = false;
-  r.endsAt = r.settings.minutes ? now + r.settings.minutes * 60000 : 0;
+  r.endsAt = S.minutes ? now + S.minutes * 60000 : 0;
   assignTeams(r);
+  const env = S.env === 'rand' ? G.BIOME_KEYS[(Math.random() * G.BIOME_KEYS.length) | 0] : S.env;
+  r.mapInfo = { seed: (Math.random() * 1e9) | 0, env, level: S.islands };
+  r.map = G.genMap(r.mapInfo.seed, S.arena, env, S.islands, om);
+  r.obj = { zs: { z: [], score: { A: 0, B: 0 } }, maxProg: 0, cur: 0, lives: S.cargoLives, len: om === 'convoy' ? G.routeLength(r.map.route) : 0 };
   const spawns = {};
+  if (om === 'convoy') {                                                       // o cargueiro é uma "entidade-bot" hospedada pelo anfitrião
+    const v = G.validateDesign(G.CARGO_DESIGN, 0, {}), rt = r.map.route, a = Math.atan2(rt[1][0] - rt[0][0], -(rt[1][1] - rt[0][1]));
+    r.players.set('cargo', { id: 'cargo', isBot: true, cargo: true, owner: r.hostId, send: () => {}, name: '🚢 Cargueiro', room: r, design: G.CARGO_DESIGN, stats: v.stats, ready: true,
+      team: 'A', teamPref: 'A', diff: 'normal', kills: 0, deaths: 0, alive: true, x: rt[0][0] + 90, y: rt[0][1], vision: v.stats.vision, sonar: 0, pingR: 0, sig: v.stats.sig, sub: false, quiet: 1,
+      dp: 0, revealUntil: 0, revealR: 0, pingUntil: 0, lastSnapAt: 0, rateT: 0, rateN: 0, respawnTimer: null });
+    spawns.cargo = { x: rt[0][0] + 90, y: rt[0][1], a: +a.toFixed(3) };
+  }
   for (const p of r.players.values()) {
     p.kills = p.deaths = 0; p.alive = true; p.ready = !!p.isBot; p.lastSnapAt = 0;
     p.vision = p.stats.vision; p.sonar = p.stats.sonarR; p.pingR = p.stats.pingR; p.sig = p.stats.sig; p.dp = 0; p.sub = false; p.quiet = 1;
-    p.revealUntil = p.pingUntil = 0; p.revealR = 0;
+    p.revealUntil = p.pingUntil = 0; p.revealR = 0; p.drones = [];
+    if (p.cargo) continue;
     const sp = spawnPoint(r, p); p.x = sp.x; p.y = sp.y; spawns[p.id] = sp;
   }
   const owns = (a, b) => a.id === b.id || a.team === b.team || a.id === b.owner || b.id === a.owner;      // a tripulação só é visível para o próprio time
   for (const p of r.players.values()) {
-    const list = [...r.players.values()].map(o => ({ id: o.id, name: o.name, team: o.team, design: owns(p, o) ? o.design : G.stripCrew(o.design), bot: !!o.isBot, owner: o.owner || '', diff: o.diff || '' }));
-    tell(p, { t: 'start', you: p.id, settings: r.settings, players: list, spawns, endsAt: r.endsAt });
+    const list = [...r.players.values()].map(o => ({ id: o.id, name: o.name, team: o.team, design: owns(p, o) ? o.design : G.stripCrew(o.design), bot: !!o.isBot, owner: o.owner || '', diff: o.diff || '', cargo: !!o.cargo }));
+    tell(p, { t: 'start', you: p.id, settings: r.settings, players: list, spawns, endsAt: r.endsAt, map: r.mapInfo });
   }
 }
 
@@ -188,23 +206,53 @@ function endMatch(r, reason) {
   if (r.state !== 'playing') return;
   r.state = 'lobby'; r.endsAt = 0; r.paused = false;
   const sb = scoreboard(r);
+  const cg = r.players.get('cargo'); if (cg) { clearTimeout(cg.respawnTimer); r.players.delete('cargo'); }
   broadcast(r, { t: 'end', ranking: sb.list, teams: sb.teams, reason: reason || '' });
   for (const p of r.players.values()) { clearTimeout(p.respawnTimer); p.ready = !!p.isBot; p.alive = false; }
+  r.map = null; r.obj = null;
   broadcastRoom(r);
+}
+
+/** atualiza o objetivo (zonas / comboio) e devolve o resumo enviado aos clientes */
+function objTick(r) {
+  const om = objMode(r), o = r.obj;
+  if (!om || !o || !r.map) return null;
+  if (om === 'zone') {
+    const ships = [...r.players.values()].filter(p => p.alive && !p.cargo).map(p => ({ x: p.x, y: p.y, team: p.team }));
+    G.zoneStep(o.zs, r.map.zones, ships, 1, ['A', 'B']);
+    const sc = o.zs.score, L = r.settings.scoreLimit;
+    if ((sc.A || 0) >= L) endMatch(r, 'Equipe A dominou as zonas!'); else if ((sc.B || 0) >= L) endMatch(r, 'Equipe B dominou as zonas!');
+    return { mode: 'zone', z: o.zs.z.map(z => [+z.cap.toFixed(3), z.owner, z.contested ? 1 : 0]), sc: { A: Math.floor(sc.A || 0), B: Math.floor(sc.B || 0) }, lim: L };
+  }
+  const c = r.players.get('cargo');
+  if (c && c.alive) {
+    const pr = G.routeProject(r.map.route, c.x, c.y);
+    o.cur = pr.t; o.maxProg = Math.max(o.maxProg, pr.t);
+    if (pr.t > o.len - 150) endMatch(r, 'Equipe A venceu: o comboio chegou ao destino!');
+  }
+  return { mode: 'convoy', prog: o.len ? +(o.cur / o.len).toFixed(3) : 0, lives: o.lives, alive: !!(c && c.alive) };
 }
 
 function roomTick(r) {
   if (r.state !== 'playing') return;
   const now = Date.now();
   if (r.paused) { broadcast(r, { t: 'score', list: scoreboard(r).list, teams: scoreboard(r).teams, left: r.endsAt ? Math.max(0, Math.round((r.endsAt - r.pausedAt) / 1000)) : -1 }); return; }
-  if (r.endsAt && now >= r.endsAt) return endMatch(r, 'Tempo esgotado!');
+  if (r.endsAt && now >= r.endsAt) {
+    const om = objMode(r);
+    if (om === 'zone') { const sc = r.obj ? r.obj.zs.score : {}; return endMatch(r, (sc.A || 0) === (sc.B || 0) ? 'Tempo esgotado: empate!' : 'Tempo esgotado: Equipe ' + ((sc.A || 0) > (sc.B || 0) ? 'A' : 'B') + ' venceu!'); }
+    if (om === 'convoy') return endMatch(r, 'Tempo esgotado: Equipe B venceu (o comboio não chegou)!');
+    return endMatch(r, 'Tempo esgotado!');
+  }
+  const obj = objTick(r);
+  if (r.state !== 'playing') return;
   const sb = scoreboard(r);
-  broadcast(r, { t: 'score', list: sb.list, teams: sb.teams, left: r.endsAt ? Math.max(0, Math.round((r.endsAt - now) / 1000)) : -1 });
+  broadcast(r, { t: 'score', list: sb.list, teams: sb.teams, left: r.endsAt ? Math.max(0, Math.round((r.endsAt - now) / 1000)) : -1, obj: obj || undefined });
 }
 
 function checkWin(r) {
+  if (objMode(r)) return;                                                       // nos modos com objetivo os abates não encerram a partida
   const sb = scoreboard(r), L = r.settings.killLimit;
-  if (r.settings.mode === 'teams') {
+  if (teamMode(r)) {
     for (const t in sb.teams) if (sb.teams[t] >= L) return endMatch(r, 'Equipe ' + t + ' venceu!');
   } else if (sb.list[0] && sb.list[0].kills >= L) return endMatch(r, sb.list[0].name + ' venceu!');
 }
@@ -289,7 +337,7 @@ function onMessage(p, raw) {
       }
       break;
     case 'setTeam':
-      if (r && r.state === 'lobby' && r.hostId === p.id && r.settings.mode === 'teams') {
+      if (r && r.state === 'lobby' && r.hostId === p.id && teamMode(r)) {
         const t = r.players.get(clean(m.id, 12));
         if (t) { t.teamPref = (m.team === 'A' || m.team === 'B') ? m.team : ''; assignTeams(r); broadcastRoom(r); }
       }
@@ -380,9 +428,9 @@ function onMessage(p, raw) {
       if (Array.isArray(m.fi) && m.fi.length <= 120) out.fi = m.fi.filter(n => Number.isInteger(n) && n >= 0 && n < 350);
       p.drones = [];
       if (Array.isArray(m.dr) && p.stats.hangars) {
-        for (const d of m.dr.slice(0, Math.min(8, p.stats.hangars))) {
-          if (!Array.isArray(d) || !['recon', 'attack', 'kamikaze'].includes(d[3])) continue;
-          p.drones.push([num(d[0], -H, H), num(d[1], -H, H), num(d[2], -50, 50), d[3], num(d[4], 0, 20), Math.min(num(d[5], 0, 450), 450)]);
+        for (const d of m.dr.slice(0, Math.min(12, p.stats.hangars * 3))) {
+          if (!Array.isArray(d) || !DRONE_KINDS.includes(d[3])) continue;
+          p.drones.push([num(d[0], -H, H), num(d[1], -H, H), num(d[2], -50, 50), d[3], num(d[4], 0, 20), Math.min(num(d[5], 0, 750), 750)]);
         }
       }
       if (p.drones.length) out.dr = p.drones;
@@ -403,16 +451,19 @@ function onMessage(p, raw) {
       if (!r || r.state !== 'playing' || !p.alive || r.paused || !SHOT_KINDS.has(m.kind)) return;
       const vals = ['x', 'y', 'vx', 'vy', 'life', 'dmg'];
       for (const k of vals) if (!Number.isFinite(+m[k])) return;
+      if (m.kind === 'ballistic' && !(p.stats && p.stats.ballistics)) return;
+      if (m.kind === 'missile' && !(p.stats && p.stats.missiles)) return;
       const sh = { t: 'shot', kind: m.kind, id: clean(m.id, 24), owner: p.id, team: p.team,
-        x: +m.x, y: +m.y, vx: num(m.vx, -1500, 1500), vy: num(m.vy, -1500, 1500), life: num(m.life, 0, 6), dmg: num(m.dmg, 0, 16),
-        pierce: num(m.pierce, 0, 4), big: !!m.big, splash: num(m.splash, 0, 70), turn: num(m.turn, 0, 4), ang: num(m.ang, -50, 50), speed: num(m.speed, 0, 1200),
-        tx: num(m.tx, -4000, 4000), ty: num(m.ty, -4000, 4000), T: num(m.T, 0, 6), x0: num(m.x0, -4000, 4000), y0: num(m.y0, -4000, 4000), tg: clean(m.tg, 12),
-        fuse: num(m.fuse, 0, 4), dmgSurf: num(m.dmgSurf, 0, 16), arm: num(m.arm, 0, 6) };
+        x: +m.x, y: +m.y, vx: num(m.vx, -1500, 1500), vy: num(m.vy, -1500, 1500), life: num(m.life, 0, 14), dmg: num(m.dmg, 0, 16),
+        pierce: num(m.pierce, 0, 4), big: !!m.big, splash: num(m.splash, 0, 130), turn: num(m.turn, 0, 4), ang: num(m.ang, -50, 50), speed: num(m.speed, 0, 1200),
+        tx: num(m.tx, -4000, 4000), ty: num(m.ty, -4000, 4000), T: num(m.T, 0, 14), x0: num(m.x0, -4000, 4000), y0: num(m.y0, -4000, 4000), tg: clean(m.tg, 12),
+        fuse: num(m.fuse, 0, 4), dmgSurf: num(m.dmgSurf, 0, 16), arm: num(m.arm, 0, 6),
+        lk: LOCK_KINDS.includes(m.lk) ? m.lk : '', sz: ['S', 'M', 'L', 'G'].includes(m.sz) ? m.sz : '', gx: num(m.gx, -4000, 4000), gy: num(m.gy, -4000, 4000) };
       if (LOUD_SHOTS.has(m.kind)) { p.revealUntil = now + 1500; p.revealR = 900; }
       const s = JSON.stringify(sh);
       for (const q of r.players.values()) {
         if (q === p || q.isBot || q.id === p.owner) continue;
-        if (q.team === p.team || !q.alive || [q, ...botsOf(r, q)].some(o => Math.hypot(o.x - sh.x, o.y - sh.y) < 2600)) tell(q, s);
+        if (sh.kind === 'ballistic' || q.team === p.team || !q.alive || [q, ...botsOf(r, q)].some(o => Math.hypot(o.x - sh.x, o.y - sh.y) < 2600)) tell(q, s);   // balístico: alerta para todos
       }
       break;
     }
@@ -431,8 +482,9 @@ function onMessage(p, raw) {
       if (by && by !== p && by.team !== p.team) by.kills++;
       const sb = scoreboard(r);
       broadcast(r, { t: 'died', id: p.id, by: by ? by.id : null, list: sb.list, teams: sb.teams });
+      if (p.cargo && r.obj) { r.obj.lives--; if (r.obj.lives <= 0) { endMatch(r, 'Equipe B venceu: o cargueiro foi destruído!'); break; } }
       checkWin(r);
-      if (r.state === 'playing') scheduleRespawn(r, p, r.settings.respawn * 1000);
+      if (r.state === 'playing') scheduleRespawn(r, p, (p.cargo ? 10 : r.settings.respawn) * 1000);
       break;
     }
   }
@@ -444,7 +496,12 @@ function scheduleRespawn(r, p, ms) {
     if (r.state !== 'playing' || !r.players.has(p.id)) return;
     if (r.paused) return scheduleRespawn(r, p, 500);                // pausado: espera
     p.alive = true; p.lastSnapAt = 0;
-    const sp = spawnPoint(r, p); p.x = sp.x; p.y = sp.y;
+    let sp;
+    if (p.cargo && r.map && r.obj) {                                          // o cargueiro renasce no último ponto de controle
+      const step = r.obj.len / 5, cp = Math.floor(r.obj.maxProg / step) * step, p1 = G.routePoint(r.map.route, cp), p2 = G.routePoint(r.map.route, Math.min(r.obj.len, cp + 80));
+      sp = { x: Math.round(p1[0]), y: Math.round(p1[1]), a: +Math.atan2(p2[0] - p1[0], -(p2[1] - p1[1])).toFixed(3) };
+    } else sp = spawnPoint(r, p);
+    p.x = sp.x; p.y = sp.y;
     p.vision = p.stats.vision; p.sonar = p.stats.sonarR; p.pingR = p.stats.pingR; p.sig = p.stats.sig; p.dp = 0; p.sub = false; p.quiet = 1;
     p.revealUntil = p.pingUntil = 0;
     broadcast(r, { t: 'spawn', id: p.id, x: sp.x, y: sp.y, a: sp.a });
