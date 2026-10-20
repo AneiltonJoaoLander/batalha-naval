@@ -175,12 +175,6 @@ class Ship {
     return best ? this.cellWorld(best) : [this.x, this.y];
   }
 
-  /** posição de um equipamento que emite (radar/sonar): alvo dos mísseis anti-radiação */
-  emitterPoint() {
-    for (const c of this.list) { if (c.dead || !c.top) continue; const k = PARTS[c.top.type].kind; if (k === 'radar' || k === 'sonar' || k === 'sonarA') return this.cellWorld(c); }
-    return [this.x, this.y];
-  }
-
   hullHp() { let s = 0; for (const c of this.list) if (isHull(c.base)) s += c.hp; return s; }
 
   /** blast = dano de explosão (o casco reativo reduz); soak = redução fixa da blindagem */
@@ -675,7 +669,7 @@ class Ship {
             if (dl < 60) break;
             gx = wx + dx0 * k; gy = wy + dy0 * k;
           } else {
-            target = lock === 'arm' ? Battle.pickArmTarget(this) : Battle.pickGuidedTarget(this);
+            target = Battle.pickGuidedTarget(this);
             if (!target) break;
           }
           t.cd = P.reload * this.rl; t.recoil = 1;
@@ -692,8 +686,8 @@ class Ship {
           t.cd = P.reload * this.rl; t.recoil = 1;
           const d = Math.min(dist, P.range), ux = (inp.strikeX - wx) / dist, uy = (inp.strikeY - wy) / dist;
           const sc = rand(0, P.scatter * (0.35 + d / P.range) * this.stats.scatterMul), sa = rand(0, TAU);
-          const tx = wx + ux * d + Math.cos(sa) * sc, ty = wy + uy * d + Math.sin(sa) * sc, T = Math.max(2.4, d / P.speed);
-          Battle.shoot({ kind: 'ballistic', size: P.size, x: wx, y: wy, x0: wx, y0: wy, tx, ty, T, life: T, dmg: P.dmg, splash: P.splash, team: this.team, owner: this.id });
+          const tx = wx + ux * d + Math.cos(sa) * sc, ty = wy + uy * d + Math.sin(sa) * sc, T = Math.max(P.minT || 2.4, d / P.speed);
+          Battle.shoot({ kind: 'ballistic', size: P.size, wh: P.wh || '', x: wx, y: wy, x0: wx, y0: wy, tx, ty, T, life: T, dmg: P.dmg, splash: P.splash, team: this.team, owner: this.id });
           for (let i = 0; i < 10; i++) Battle.addP({ t: 'smoke', x: wx, y: wy, vx: rand(-40, 40), vy: rand(-60, -10), life: rand(1, 2), s: rand(6, 11), g: 14, a: 0.9 });
           Battle.addP({ t: 'flash', x: wx, y: wy, life: 0.25, s: 20, g: 60 });
           SFX.play('boom', wx, wy); this.doReveal(1500, 3);
@@ -772,7 +766,7 @@ class Ship {
         break;
       case 'jammer':
         for (const sh of Battle.shots)
-          if ((sh.kind === 'missile' || (sh.kind === 'torp' && sh.turn)) && sh.lock !== 'heat' && sh.lock !== 'gps' && sh.lock !== 'arm' && sh.lock !== 'acoustic' && sh.team !== this.team && !sh.dead && Math.hypot(sh.x - wx, sh.y - wy) < P.range) sh.jam = 1.5;
+          if ((sh.kind === 'missile' || (sh.kind === 'torp' && sh.turn)) && sh.lock !== 'heat' && sh.lock !== 'gps' && sh.lock !== 'acoustic' && sh.team !== this.team && !sh.dead && Math.hypot(sh.x - wx, sh.y - wy) < P.range) sh.jam = 1.5;
         break;
       case 'repair': {
         t.acc += dt;
@@ -1236,18 +1230,6 @@ const Battle = {
     if (ship.ai) return this.nearestEnemy(ship, ship.x, ship.y, 1600);
     return this.nearestEnemy(ship, inp.aimX, inp.aimY, 450) || this.nearestEnemy(ship, ship.x, ship.y, 1600);
   },
-  /** míssil anti-radiação: prefere quem tem radar/sonar (mais perto do cursor) */
-  pickArmTarget(ship) {
-    const inp = ship.input, rx = ship.ai ? ship.x : inp.aimX, ry = ship.ai ? ship.y : inp.aimY;
-    let best = null, bd = 1e9;
-    for (const s of this.ships) {
-      if (s.team === ship.team || s.sinking || s.dead || !this.canTarget(ship, s)) continue;
-      const emits = s.stats.radars + s.stats.sonars + s.stats.pings > 0 || s.pingT > 0;
-      const d = Math.hypot(s.x - rx, s.y - ry) + (emits ? 0 : 700);
-      if (d < bd && Math.hypot(s.x - ship.x, s.y - ship.y) < 1700) { bd = d; best = s; }
-    }
-    return best;
-  },
   /** torpedo acústico: o navio mais barulhento perto (não precisa estar detectado; furtivo some) */
   pickAcousticTarget(ref) {
     let best = null, bs = 0;
@@ -1539,7 +1521,7 @@ const Battle = {
         p.x = p.x0 + (p.tx - p.x0) * k; p.y = p.y0 + (p.ty - p.y0) * k;
         if (Math.random() < dt * 40) this.addP({ t: 'smoke', x: p.x, y: p.y, life: 0.9, s: 3 + 5 * k, g: 8, a: 0.5 });
         if (p.life <= 0) {
-          p.dead = true; this.blast(p.tx, p.ty, p.splash, p.dmg, p.team, p.owner, 'ballistic'); this.splash(p.tx, p.ty, 2.4);
+          p.dead = true; this.landBallistic(p); this.splash(p.tx, p.ty, 2.4);
           this.shake = Math.min(1, this.shake + 0.5 * clamp(1 - Math.hypot(p.tx - this.player.x, p.ty - this.player.y) / 1400, 0, 1) + 0.05);
         }
         continue;
@@ -2021,6 +2003,18 @@ const Battle = {
     this.impact(p.x, p.y); s.hitCell(c, p.dmg, false, p.owner, p.kind); return true;
   },
 
+  /** queda de um míssil balístico: ogiva comum, nuclear, incendiária, EMP ou MIRV (6 submunições) */
+  landBallistic(p) {
+    const wh = p.wh || '';
+    if (wh === 'cluster') {
+      for (let i = 0; i < 6; i++) {
+        const a = rand(0, TAU), r = Math.sqrt(Math.random()) * 110, T = 0.12 + i * 0.09;
+        this.shots.push({ kind: 'mortar', x: p.tx, y: p.ty, x0: p.tx, y0: p.ty, tx: p.tx + Math.cos(a) * r, ty: p.ty + Math.sin(a) * r, T, life: T, dmg: p.dmg, splash: p.splash, team: p.team, owner: p.owner });
+      }
+      return;
+    }
+    this.blast(p.tx, p.ty, p.splash, p.dmg, p.team, p.owner, wh === 'nuke' ? 'nuke' : wh === 'inc' ? 'inc' : wh === 'emp' ? 'emp' : 'ballistic', null, wh === 'nuke' ? false : undefined);
+  },
   /** ogivas especiais ao acertar uma célula */
   detonate(p, s, c) {
     const wh = p.wh || '';
@@ -2091,7 +2085,7 @@ const Battle = {
     let tg = p.target;
     if (tg && tg.flare) { if (tg.dead || tg.life <= 0) tg = p.target = null; }
     else if (tg && (tg.sinking || tg.dead)) tg = p.target = null;
-    if (tg && !tg.flare && !p.remoteOwned && lock !== 'heat' && lock !== 'gps' && lock !== 'arm' && lock !== 'acoustic' && !(this.mode === 'online' ? (tg.team === this.player.team || this.visibleToMe(tg)) : this.teamSees(p.team, tg))) tg = p.target = null;
+    if (tg && !tg.flare && !p.remoteOwned && lock !== 'heat' && lock !== 'gps' && lock !== 'acoustic' && !(this.mode === 'online' ? (tg.team === this.player.team || this.visibleToMe(tg)) : this.teamSees(p.team, tg))) tg = p.target = null;
     const ownerLive = p.ownerShip && !p.remoteOwned && !p.ownerShip.dead && !p.ownerShip.sinking;
     const gpsOk = lock === 'gps' && (p.gx || p.gy);
     if (!tg && !p.jam && !gpsOk && !(lock === 'tele' && ownerLive)) tg = p.target = lock === 'acoustic' ? this.pickAcousticTarget({ team: p.team, x: p.x, y: p.y }) : this.nearestEnemy({ team: p.team }, p.x, p.y, lock === 'heat' ? 700 : 900);
@@ -2118,7 +2112,6 @@ const Battle = {
     } else if (tg) {
       let tx = tg.x, ty = tg.y;
       if (lock === 'heat' && !tg.flare && tg.heatPoint) [tx, ty] = tg.heatPoint();      // mira no motor mais quente
-      else if (lock === 'arm' && tg.emitterPoint) [tx, ty] = tg.emitterPoint();          // mira no radar/sonar
       p.ang = turnToward(p.ang, Math.atan2(tx - p.x, -(ty - p.y)), p.turn * dt);
     }
     const [dx, dy] = dirOf(p.ang);

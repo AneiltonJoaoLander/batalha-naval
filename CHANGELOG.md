@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.9.2 — armas nucleares só como balísticos
+- **Removidos** os 7 mísseis de cruzeiro especiais da v1.9.1 (nuclear, fragmentação, perfurante, incendiário, EMP, supersônico e anti-radiação) e o **torpedo nuclear**. Projetos salvos que usavam peças removidas as perdem automaticamente (sem quebrar o jogo).
+- **Novos mísseis balísticos** (marque no minimapa, lance com B): **Nuclear** (260 de raio, incendeia, atordoa, zera escudos e dá um clarão; recarga de 90 s), **MIRV** (6 ogivas em área), **Incendiário**, **EMP**, **Hipersônico** (chega em ~1 s) e **Perfurante** (dano enorme no ponto).
+- Os torpedos novos continuam: mini, acústico, magnético e cacheiro. A regra "Permitir armas nucleares" da sala vale para o balístico nuclear.
+- O **Cruzador Tático** agora usa mísseis de cruzeiro comuns e balísticos incendiário e EMP.
+
 ## v1.9.1 — mais mísseis, mais torpedos e otimização
 **Mísseis de cruzeiro novos**
 - **Nuclear:** ogiva de 230 de raio; incendeia tudo, atordoa a tripulação, zera escudos e cega a tela com um clarão. Lento (recarga de 60 s), a defesa pontual pode derrubá-lo.

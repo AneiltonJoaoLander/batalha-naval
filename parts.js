@@ -9,7 +9,7 @@
    A proa (frente) do navio aponta para CIMA da grade.
    ===================================================================== */
 
-const VERSION = '1.9.1';
+const VERSION = '1.9.2';
 const GRID_W = 13;
 const GRID_H = 17;
 const BASE_BUDGET = 220;
@@ -285,29 +285,26 @@ PARTS['Σ'] = { layer: 'top', kind: 'plate', name: 'Placa Isolante Térmica', co
   desc: 'Esconde o calor dos motores vizinhos (4 lados): cada placa reduz à metade a atração dos mísseis térmicos por eles.' };
 
 /* ================= v1.9.1: mais mísseis de cruzeiro (nuclear e outros) e mais torpedos ================= */
-LOCKS.arm = { name: 'Anti-radiação', col: '#c18bff', cost: 0, turn: 0,
-  desc: 'Procura quem emite: prefere navios com radar ou sonar e mira no equipamento. Imune a flares; defesa pontual e bloqueador funcionam.' };
 LOCKS.acoustic = { name: 'Acústico', col: '#7fe3ff', cost: 0, turn: 0,
   desc: 'Ouve o ruído dos motores: trava no navio mais barulhento (até em submarinos que você não enxerga). Navio parado, silencioso ou furtivo é difícil de ouvir.' };
-const SPECIAL_MISSILES = {
-  'Γ': { name: 'Míssil Nuclear', lock: 'radar', size: 'G', wh: 'nuke', nuke: true, cost: 260, hp: 3, mass: 4, dmg: 30, reload: 60, speed: 160, range: 1100, splash: 230, turn: 1.2,
-    desc: 'Ogiva nuclear: explosão gigantesca (230 de raio) que incendeia tudo, atordoa a tripulação e derruba escudos. Lento e recarrega em 60 s: a defesa pontual pode derrubá-lo. Pode ser proibido pelo anfitrião.' },
-  'Δ': { name: 'Míssil de Fragmentação', lock: 'radar', size: 'M', wh: 'cluster', cost: 48, hp: 2, mass: 1.8, dmg: 2, reload: 6, speed: 240, range: 850, splash: 20, turn: 2.2,
-    desc: 'Perto do alvo se abre e solta 5 submunições que caem em área. Ótimo contra alvos largos e navios com muitas peças.' },
-  'Λ': { name: 'Míssil Perfurante', lock: 'radar', size: 'M', wh: 'ap', cost: 44, hp: 2, mass: 1.8, dmg: 9, reload: 5.5, speed: 280, range: 800, splash: 14, turn: 2.0,
-    desc: 'Ogiva de penetração: atravessa a blindagem e fere as 2 peças seguintes em linha. Pouca explosão, muito dano interno.' },
-  'Ξ': { name: 'Míssil Incendiário', lock: 'radar', size: 'M', wh: 'inc', cost: 36, hp: 2, mass: 1.6, dmg: 4, reload: 5, speed: 250, range: 800, splash: 40, turn: 2.3,
-    desc: 'Napalm: quase sempre põe fogo nas peças atingidas. Letal contra munição e motores; casco corta-fogo resiste.' },
-  'Π': { name: 'Míssil EMP', lock: 'radar', size: 'M', wh: 'emp', cost: 52, hp: 2, mass: 1.6, dmg: 1, reload: 12, speed: 250, range: 800, splash: 80, turn: 2.2,
-    desc: 'Pulso eletromagnético: quase não fere, mas zera o escudo e atordoa a tripulação inimiga (perde as funções) por 7 s.' },
-  'Ψ': { name: 'Míssil Supersônico', lock: 'radar', size: 'L', wh: 'sonic', cost: 40, hp: 2, mass: 1.3, dmg: 6, reload: 6, speed: 520, range: 1100, splash: 24, turn: 1.0,
-    desc: 'Velocidade enorme e curva aberta: a defesa pontual falha mais contra ele. Bom contra alvos que não desviam.' },
-  'Ω': { name: 'Míssil Anti-Radiação', lock: 'arm', size: 'M', wh: 'arm', cost: 40, hp: 2, mass: 1.6, dmg: 8, reload: 6, speed: 270, range: 1000, splash: 30, turn: 2.4,
-    desc: 'Caça emissores: prefere navios com radar, sonar ou sonar ativo e mira justamente nesses equipamentos. ' + 'Imune a flares e ao bloqueador; a defesa pontual o derruba.' },
+/** mísseis balísticos especiais (o nuclear só existe como balístico) */
+const SPECIAL_BALLISTICS = {
+  'Γ': { name: 'Míssil Balístico Nuclear', size: 'G', wh: 'nuke', nuke: true, cost: 320, hp: 5, mass: 8, dmg: 40, splash: 260, reload: 90, minRange: 600,
+    desc: 'Ogiva nuclear: explosão de 260 de raio que incendeia tudo, atordoa a tripulação, zera escudos e cega a tela com um clarão. Recarrega em 90 s. O anfitrião pode proibir.' },
+  'Δ': { name: 'Míssil Balístico MIRV', size: 'M', wh: 'cluster', cost: 130, hp: 4, mass: 5, dmg: 5, splash: 40, reload: 28,
+    desc: 'Cabeça múltipla: cai em 6 ogivas espalhadas por uma área de 110 de raio. Ótimo contra frotas.' },
+  'Ξ': { name: 'Míssil Balístico Incendiário', size: 'M', wh: 'inc', cost: 100, hp: 4, mass: 4.5, dmg: 4, splash: 130, reload: 24,
+    desc: 'Napalm em área grande: quase todas as peças atingidas pegam fogo. Letal contra munição e motores.' },
+  'Π': { name: 'Míssil Balístico EMP', size: 'M', wh: 'emp', cost: 110, hp: 4, mass: 4.5, dmg: 1, splash: 170, reload: 30,
+    desc: 'Pulso eletromagnético gigante (170 de raio): zera escudos e atordoa a tripulação inimiga por 7 s. Quase não fere.' },
+  'Ψ': { name: 'Míssil Balístico Hipersônico', size: 'S', wh: 'hyper', cost: 120, hp: 3, mass: 3.5, dmg: 9, splash: 55, reload: 20, speed: 1100, minT: 1.1, scatter: 22,
+    desc: 'Chega em pouco mais de 1 s e é bem preciso: quase não dá tempo de fugir do alerta.' },
+  'Λ': { name: 'Míssil Balístico Perfurante', size: 'S', wh: 'ap', cost: 110, hp: 3, mass: 3.5, dmg: 30, splash: 38, reload: 26, scatter: 20,
+    desc: 'Penetrador: explosão pequena e dano enorme no ponto de impacto. Para acabar com um navio parado.' },
 };
-for (const code in SPECIAL_MISSILES) {
-  const M = SPECIAL_MISSILES[code];
-  PARTS[code] = Object.assign({ layer: 'top', kind: 'missile' }, M, { desc: M.desc + ' (Espaço ou botão direito)' });
+for (const code in SPECIAL_BALLISTICS) {
+  const B = SPECIAL_BALLISTICS[code];
+  PARTS[code] = Object.assign({ layer: 'top', kind: 'ballistic', speed: 420, range: 3600, minRange: 300, scatter: 36 }, B, { desc: B.desc + ' Marque a região no MINIMAPA e lance com B (ou o botão 🎯).' });
 }
 const SPECIAL_TORPS = {
   'Ж': { name: 'Mini-torpedos', cost: 22, hp: 2, mass: 1, dmg: 4, reload: 2.4, speed: 300, range: 650, splash: 22, shots: 2, spread: 0.09,
@@ -318,8 +315,6 @@ const SPECIAL_TORPS = {
     desc: 'Explode ao passar por baixo do casco (38 de distância), abrindo um rombo maior (mais alagamento). Não precisa acertar de frente.' },
   'Ц': { name: 'Torpedo Cacheiro', cost: 44, hp: 2, mass: 1.8, dmg: 6, reload: 6, speed: 230, range: 800, splash: 28, wh: 'split',
     desc: 'Depois de 1 s se divide em 3 torpedos em leque: difícil de desviar de todos.' },
-  'Щ': { name: 'Torpedo Nuclear', cost: 230, hp: 3, mass: 4, dmg: 34, reload: 70, speed: 150, range: 700, splash: 240, wh: 'nuke', nuke: true,
-    desc: 'Ogiva nuclear submarina: explosão de 240 de raio que atinge até submarinos, incendeia e atordoa. Muito lento; recarrega em 70 s. Pode ser proibido pelo anfitrião.' },
 };
 for (const code in SPECIAL_TORPS) PARTS[code] = Object.assign({ layer: 'top', kind: 'torp' }, SPECIAL_TORPS[code], { desc: SPECIAL_TORPS[code].desc + ' (Espaço ou botão direito)' });
 
@@ -414,7 +409,7 @@ const TOOLS = [
   add('ο', 'Contramedidas');
   for (const c of ['π', 'ρ', 'σ', 'τ', 'υ']) add(c, 'Drones');
   for (const c of ['φ', 'χ', 'ψ', 'ω', 'Σ']) add(c, 'Blindagem de convés');
-  for (const c in SPECIAL_MISSILES) add(c, 'Mísseis de cruzeiro');
+  for (const c in SPECIAL_BALLISTICS) add(c, 'Mísseis balísticos');
   for (const c in SPECIAL_TORPS) add(c, 'Torpedos');
   const ord = TOOLS.map((t, i) => [t, i]);
   ord.sort((a, b) => (GROUP_ORDER.indexOf(a[0].group) - GROUP_ORDER.indexOf(b[0].group)) || (a[1] - b[1]));
@@ -529,6 +524,10 @@ function cloneDesign(d) { return { hull: d.hull.map(r => r.slice()), top: d.top.
 /** garante que projetos antigos (sem tripulação) tenham a camada */
 function normalizeDesign(d) {
   if (!d.crew || d.crew.length !== GRID_H) d.crew = emptyGrid();
+  for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) {                // peças que não existem mais (versões antigas) somem
+    if (d.top[y] && d.top[y][x] && !PARTS[d.top[y][x]]) d.top[y][x] = '';
+    if (d.hull[y] && d.hull[y][x] && !PARTS[d.hull[y][x]]) d.hull[y][x] = '';
+  }
   return d;
 }
 /** versão sem a tripulação (o inimigo não pode ver onde ela fica) */
@@ -1217,7 +1216,7 @@ const PRESETS = [
     '  e   e  ',
     '         ',
   ]) },
-  { id: 'misseisespeciais', name: 'Cruzador Tático', power: 7, minWave: 9, role: 'Mísseis supersônico, perfurante, incendiário, EMP, fragmentação e anti-radiação.', design: makeDesign([
+  { id: 'misseisespeciais', name: 'Cruzador Tático', power: 7, minWave: 9, role: 'Mísseis térmico, GPS e teleguiado, mais balísticos incendiário e EMP.', design: makeDesign([
     '    #    ',
     '   ###   ',
     '  #####  ',
@@ -1229,10 +1228,10 @@ const PRESETS = [
     '  #####  ',
     '  v v v  ',
   ], [
-    '    Ψ    ',
-    '   Λ Ξ   ',
-    '  Δ   Π  ',
-    '   D Ω   ',
+    '    δ    ',
+    '   γ ζ   ',
+    '  ι   Ξ  ',
+    '   D Π   ',
     '         ',
     ' ο  A  ο ',
     '    r    ',
@@ -2028,7 +2027,7 @@ function drawTop(ctx, code, cs, o = {}) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { CREW, normalizeDesign, stripCrew, BOT_DIFFS, VERSION, DEEP, GRID_W, GRID_H, BASE_BUDGET, VISION_BASE, REVEAL_NEAR, PARTS, PRESETS, shipStats, designCells,
     validateDesign, detects, isHull, isBridge, isFin, clamp,
-    LOCKS, SPECIAL_MISSILES, SPECIAL_TORPS, BIOMES, BIOME_KEYS, ISLAND_LEVELS, genMap, pickSpawn, zoneStep, routeLength, routeProject, routePoint, freeOfIslands, inIsland, CARGO_DESIGN, mulberry32 };
+    LOCKS, SPECIAL_BALLISTICS, SPECIAL_TORPS, BIOMES, BIOME_KEYS, ISLAND_LEVELS, genMap, pickSpawn, zoneStep, routeLength, routeProject, routePoint, freeOfIslands, inIsland, CARGO_DESIGN, mulberry32 };
 }
 
 /** círculo de tripulação (canto da célula). Só o dono e os aliados veem; para o inimigo é invisível. */
@@ -2153,34 +2152,21 @@ function drawV191(ctx, code, cs, o) {
   const P = PARTS[code];
   if (!P) return false;
   const t = (o && o.time) || 0;
-  if (P.kind === 'missile' && P.wh) {
-    const L = LOCKS[P.lock] || LOCKS.radar, big = P.size === 'G', small = P.size === 'L';
-    rr(ctx, -cs * 0.42, -cs * 0.42, cs * 0.84, cs * 0.84, cs * 0.08);
-    ctx.fillStyle = P.wh === 'nuke' ? '#3b3320' : '#2c3541'; ctx.fill(); ctx.strokeStyle = '#14181d'; ctx.lineWidth = 1.2; ctx.stroke();
-    const n = small ? 3 : big ? 1 : 2, w = cs * (big ? 0.26 : small ? 0.11 : 0.15), len = cs * (big ? 0.72 : small ? 0.56 : 0.6);
-    const body = { nuke: '#e8d9a0', cluster: '#d8dde3', ap: '#cfd6dc', inc: '#e2b9a0', emp: '#c4d6e8', sonic: '#eef1f4', arm: '#d9cdea' }[P.wh] || '#d8dde3';
-    const tip = { nuke: '#f5c518', cluster: '#9aa4ae', ap: '#5b6670', inc: '#ff7a1f', emp: '#4cc9ff', sonic: '#e8503a', arm: '#c18bff' }[P.wh] || L.col;
-    for (let i = 0; i < n; i++) {
-      const sx = n === 1 ? 0 : (i - (n - 1) / 2) * cs * (small ? 0.24 : 0.3);
-      ctx.fillStyle = body; ctx.fillRect(sx - w / 2, -len / 2 + cs * 0.04, w, len);
-      ctx.fillStyle = tip; ctx.fillRect(sx - w / 2, -len / 2 + cs * 0.04, w, len * 0.22);
-      poly(ctx, [[sx - w / 2, -len / 2 + cs * 0.04], [sx + w / 2, -len / 2 + cs * 0.04], [sx, -len / 2 - cs * 0.07]]); ctx.fillStyle = tip; ctx.fill();
-    }
-    const cx = cs * 0.28, cy = cs * 0.3; ctx.lineWidth = 1.5; ctx.strokeStyle = tip; ctx.fillStyle = tip;
+  if (P.kind === 'ballistic' && P.wh) {
+    drawV19(ctx, code, cs, o);                                        // silo base
+    const tip = { nuke: '#f5c518', cluster: '#9aa4ae', ap: '#5b6670', inc: '#ff7a1f', emp: '#4cc9ff', hyper: '#e8503a' }[P.wh] || '#fff';
+    const cx = cs * 0.26, cy = -cs * 0.26; ctx.lineWidth = 1.6; ctx.strokeStyle = tip; ctx.fillStyle = tip;
     switch (P.wh) {
-      case 'nuke':                                                    // trifólio de radiação
-        for (let i = 0; i < 3; i++) { const a = i * TAU / 3 + t * 0.8; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, cs * 0.12, a, a + 0.9); ctx.closePath(); ctx.fill(); }
-        break;
-      case 'cluster': for (let i = 0; i < 5; i++) { ctx.beginPath(); ctx.arc(cx + (i % 3 - 1) * cs * 0.07, cy + (i < 3 ? -0.04 : 0.05) * cs, cs * 0.028, 0, TAU); ctx.fill(); } break;
+      case 'nuke': for (let i = 0; i < 3; i++) { const a = i * TAU / 3 + t * 0.8; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, cs * 0.14, a, a + 0.9); ctx.closePath(); ctx.fill(); } break;
+      case 'cluster': for (let i = 0; i < 6; i++) { ctx.beginPath(); ctx.arc(cx + (i % 3 - 1) * cs * 0.07, cy + (i < 3 ? -0.04 : 0.05) * cs, cs * 0.03, 0, TAU); ctx.fill(); } break;
       case 'ap': poly(ctx, [[cx - cs * 0.1, cy + cs * 0.08], [cx + cs * 0.1, cy], [cx - cs * 0.1, cy - cs * 0.08]]); ctx.fill(); break;
-      case 'inc': poly(ctx, [[cx, cy - cs * 0.11], [cx + cs * 0.07, cy + cs * 0.06], [cx, cy + cs * 0.02], [cx - cs * 0.07, cy + cs * 0.06]]); ctx.fill(); break;
-      case 'emp': poly(ctx, [[cx + cs * 0.03, cy - cs * 0.11], [cx - cs * 0.06, cy + cs * 0.01], [cx, cy + cs * 0.01], [cx - cs * 0.03, cy + cs * 0.11], [cx + cs * 0.06, cy - cs * 0.01], [cx, cy - cs * 0.01]]); ctx.fill(); break;
-      case 'sonic': for (let i = 0; i < 2; i++) { ctx.beginPath(); ctx.moveTo(cx - cs * 0.1 + i * cs * 0.08, cy - cs * 0.08); ctx.lineTo(cx - cs * 0.04 + i * cs * 0.08, cy); ctx.lineTo(cx - cs * 0.1 + i * cs * 0.08, cy + cs * 0.08); ctx.stroke(); } break;
-      case 'arm': ctx.beginPath(); ctx.arc(cx, cy, cs * 0.08, 0, TAU); ctx.moveTo(cx - cs * 0.13, cy + cs * 0.13); ctx.lineTo(cx + cs * 0.13, cy - cs * 0.13); ctx.stroke(); break;
+      case 'inc': poly(ctx, [[cx, cy - cs * 0.12], [cx + cs * 0.08, cy + cs * 0.07], [cx, cy + cs * 0.02], [cx - cs * 0.08, cy + cs * 0.07]]); ctx.fill(); break;
+      case 'emp': poly(ctx, [[cx + cs * 0.03, cy - cs * 0.12], [cx - cs * 0.07, cy + cs * 0.01], [cx, cy + cs * 0.01], [cx - cs * 0.03, cy + cs * 0.12], [cx + cs * 0.07, cy - cs * 0.01], [cx, cy - cs * 0.01]]); ctx.fill(); break;
+      case 'hyper': for (let i = 0; i < 2; i++) { ctx.beginPath(); ctx.moveTo(cx - cs * 0.1 + i * cs * 0.09, cy - cs * 0.09); ctx.lineTo(cx - cs * 0.03 + i * cs * 0.09, cy); ctx.lineTo(cx - cs * 0.1 + i * cs * 0.09, cy + cs * 0.09); ctx.stroke(); } break;
     }
     return true;
   }
-  if (P.kind === 'torp' && /[ЖДФЦЩ]/.test(code)) {
+  if (P.kind === 'torp' && /[ЖДФЦ]/.test(code)) {
     ctx.fillStyle = '#2c3541'; ctx.fillRect(-cs * 0.4, -cs * 0.1, cs * 0.8, cs * 0.2);
     const tube = (sx, w, col, body) => { ctx.fillStyle = body || '#566474'; ctx.fillRect(sx * cs - cs * w / 2, -cs * 0.44, cs * w, cs * 0.88); ctx.fillStyle = col; ctx.fillRect(sx * cs - cs * w / 2, -cs * 0.44, cs * w, cs * 0.13); };
     switch (code) {
@@ -2188,10 +2174,6 @@ function drawV191(ctx, code, cs, o) {
       case 'Д': tube(0, 0.2, '#7fe3ff'); ctx.strokeStyle = '#7fe3ff'; ctx.lineWidth = 1.4; ctx.beginPath(); ctx.arc(cs * 0.26, -cs * 0.18, cs * 0.1, -2.2, 0.6); ctx.stroke(); ctx.beginPath(); ctx.arc(cs * 0.26, -cs * 0.18, cs * 0.17, -2.2, 0.6); ctx.stroke(); break;
       case 'Ф': tube(0, 0.2, '#e8503a'); ctx.strokeStyle = '#e8503a'; ctx.lineWidth = 2.2; ctx.beginPath(); ctx.arc(cs * 0.27, -cs * 0.05, cs * 0.12, Math.PI * 0.5, Math.PI * 1.5); ctx.stroke(); ctx.fillStyle = '#6a9bff'; ctx.fillRect(cs * 0.27, -cs * 0.19, cs * 0.06, cs * 0.05); ctx.fillStyle = '#ff6a6a'; ctx.fillRect(cs * 0.27, cs * 0.09, cs * 0.06, cs * 0.05); break;
       case 'Ц': tube(0, 0.22, '#4cc9ff'); ctx.strokeStyle = '#4cc9ff'; ctx.lineWidth = 1.4; for (const a of [-0.45, 0, 0.45]) { ctx.beginPath(); ctx.moveTo(0, -cs * 0.46); ctx.lineTo(Math.sin(a) * cs * 0.3, -cs * 0.46 - Math.cos(a) * cs * 0.08); ctx.stroke(); } break;
-      case 'Щ':
-        tube(0, 0.3, '#f5c518', '#6b5a2a');
-        ctx.fillStyle = '#f5c518'; for (let i = 0; i < 3; i++) { const a = i * TAU / 3 + t * 0.8; ctx.beginPath(); ctx.moveTo(0, cs * 0.12); ctx.arc(0, cs * 0.12, cs * 0.13, a, a + 0.9); ctx.closePath(); ctx.fill(); }
-        break;
     }
     return true;
   }
