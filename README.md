@@ -1,4 +1,4 @@
-# ⚓ Batalha Naval — v1.9
+# ⚓ Batalha Naval — v1.9.1
 
 Monte seu navio **peça por peça** numa grade (casco, armas, motores, aletas, sensores…) e lute contra ondas de inimigos
 ou contra outros jogadores **online**. Funciona no computador e no **celular** (instalável como app).
@@ -35,6 +35,7 @@ ou contra outros jogadores **online**. Funciona no computador e no **celular** (
   - **Mais placas de convés:** Pesada, Cerâmica, Titânio, Corta-fogo e Isolante Térmica (esconde o calor dos motores vizinhos).
   - **Ilhas** (terra invencível: navios batem e tiros diretos param; morteiros, balísticos e drones passam por cima) e **7 ambientes**: mar aberto, arquipélago tropical, ártico, tempestade, nevoeiro, noite e costa vulcânica (alguns reduzem a visão).
   - **Modos de partida** (online e contra bots): **Controle de Zona** (segure 3 zonas para pontuar) e **Comboio** (a equipe A escolta o cargueiro até o destino; a B tenta afundá-lo; ele renasce no último ponto de controle até acabarem as vidas).
+- **Mais mísseis e torpedos (v1.9.1):** míssil **nuclear** (explosão gigantesca que incendeia, atordoa e derruba escudos; o anfitrião pode proibir), **fragmentação** (5 submunições), **perfurante**, **incendiário**, **EMP**, **supersônico** e **anti-radiação**; torpedos **mini** (2 por salva), **acústico** (ouve o ruído), **magnético** (explode sob o casco), **cacheiro** (divide em 3) e **nuclear**. O jogo também ficou mais leve: névoa em baixa resolução, navios e ilhas em cache e menos trabalho por quadro.
 - **Bots configuráveis (v1.6):** dificuldade, quantidade, modelos permitidos, *escaramuça* offline e **bots nas salas online** (o anfitrião adiciona; rodam no navegador dele).
 - **Zoom (v1.6):** ⚙ Opções (35%–160%) ou roda do mouse / `−` `+` na batalha.
 - **Visão e furtividade (v1.5):**

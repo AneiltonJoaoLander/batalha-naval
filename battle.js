@@ -63,7 +63,7 @@ const SFX = {
 
 /* vizinhança 4 e chances de incêndio */
 const N4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-const FIRE_CH = { shell: 0.16, heavy: 0.08, bullet: 0.03, flame: 0.02, rail: 0.05, mortar: 0.28, torp: 0.3, missile: 0.34, mine: 0.3, depth: 0.1, melee: 0.05, cook: 0.35, bomb: 0.2, ballistic: 0.45 };
+const FIRE_CH = { shell: 0.16, heavy: 0.08, bullet: 0.03, flame: 0.02, rail: 0.05, mortar: 0.28, torp: 0.3, missile: 0.34, mine: 0.3, depth: 0.1, melee: 0.05, cook: 0.35, bomb: 0.2, ballistic: 0.45, nuke: 0.8, inc: 0.9, emp: 0.05, mag: 0.3 };
 const FLAMMABLE = { engine: 1.8, torp: 1.6, missile: 1.6, mortar: 1.5, cannon: 1.3, depth: 1.4, mine: 1.3, mg: 1.1, repair: 0.8, shield: 0.6, ballistic: 1.7, flare: 1.4, plate: 0.6 };
 const AMMO = new Set(['torp', 'missile', 'mortar', 'depth', 'mine', 'ballistic', 'flare']);
 /** projéteis de tiro direto que param nas ilhas */
@@ -80,8 +80,9 @@ class Ship {
     this.cells = new Map(); this.order = [];
     this.id = ''; this.remote = false; this.seenT = 0; this.lastAttacker = null;
     this.revealT = 0; this.revealR = 0; this.pingT = 0; this.reveal = false; this.ping = false;
-    let sx = 0, sy = 0, n = 0, hp = 0;
+    let sx = 0, sy = 0, n = 0, hp = 0, gx0 = 99, gy0 = 99, gx1 = -1, gy1 = -1;
     const all = [];
+    this.grid = new Array(GRID_W * GRID_H).fill(null);
     for (let gy = 0; gy < GRID_H; gy++) for (let gx = 0; gx < GRID_W; gx++) {
       const base = design.hull[gy][gx]; if (!base) continue;
       const P = PARTS[base];
@@ -92,11 +93,12 @@ class Ship {
         const TP = PARTS[tc];
         cell.top = { type: tc, hp: TP.hp, maxHp: TP.hp, cd: rand(0, 0.6), ang, recoil: 0, acc: 0, tgt: null, tt: 0 };
       }
-      this.cells.set(gx + ',' + gy, cell); this.order.push(gx + ',' + gy);
+      this.cells.set(gx + ',' + gy, cell); this.order.push(gx + ',' + gy); this.grid[gy * GRID_W + gx] = cell;
+      if (gx < gx0) gx0 = gx; if (gx > gx1) gx1 = gx; if (gy < gy0) gy0 = gy; if (gy > gy1) gy1 = gy;
       all.push({ base, top: cell.top ? tc : null, crew: cell.crew });
       if (isHull(base)) { sx += gx + 0.5; sy += gy + 0.5; n++; hp += P.hp; }
     }
-    this.ox = sx / n; this.oy = sy / n;
+    this.ox = sx / n; this.oy = sy / n; this.gb = { x0: gx0, y0: gy0, x1: gx1, y1: gy1 };
     this.initialHull = n; this.maxHullHp = hp;
     this.cost = shipStats(all).cost;
     this.input = { throttle: 0, steer: 0, aimX: x, aimY: y, fireMain: false, fireTorp: false, fireMissile: false, fireAux: false, dive: false, fireBallistic: false, strike: false, strikeX: 0, strikeY: 0 };
@@ -153,7 +155,9 @@ class Ship {
     const dx = wx - this.x, dy = wy - this.y;
     if (dx * dx + dy * dy > this.radius * this.radius) return null;
     const lx = dx * this.ca + dy * this.sa, ly = -dx * this.sa + dy * this.ca;
-    return this.cells.get(Math.floor(lx / CS + this.ox) + ',' + Math.floor(ly / CS + this.oy)) || null;
+    const gx = Math.floor(lx / CS + this.ox), gy = Math.floor(ly / CS + this.oy);
+    if (gx < 0 || gy < 0 || gx >= GRID_W || gy >= GRID_H) return null;
+    return this.grid[gy * GRID_W + gx];
   }
 
   /** posição do motor mais quente (alvo dos mísseis térmicos); motor elétrico é frio, placa isolante esconde o calor */
@@ -169,6 +173,12 @@ class Ship {
       if (h > bs) { bs = h; best = c; }
     }
     return best ? this.cellWorld(best) : [this.x, this.y];
+  }
+
+  /** posição de um equipamento que emite (radar/sonar): alvo dos mísseis anti-radiação */
+  emitterPoint() {
+    for (const c of this.list) { if (c.dead || !c.top) continue; const k = PARTS[c.top.type].kind; if (k === 'radar' || k === 'sonar' || k === 'sonarA') return this.cellWorld(c); }
+    return [this.x, this.y];
   }
 
   hullHp() { let s = 0; for (const c of this.list) if (isHull(c.base)) s += c.hp; return s; }
@@ -212,7 +222,7 @@ class Ship {
 
   removeCell(c) {
     if (c.dead) return;
-    c.dead = true; this.cells.delete(c.gx + ',' + c.gy);
+    c.dead = true; this.cells.delete(c.gx + ',' + c.gy); this.grid[c.gy * GRID_W + c.gx] = null;
     const [wx, wy] = this.cellWorld(c);
     if (c.top) Battle.explosion(wx, wy, 0.4);
     Battle.debris(wx, wy, c.base);
@@ -620,13 +630,15 @@ class Ship {
       }
       case 'torp':
         if (inp.fireTorp && t.cd <= 0) {
+          const tlock = P.lock || '';
+          const target = tlock === 'acoustic' ? Battle.pickAcousticTarget(this) : (P.turn ? Battle.pickGuidedTarget(this) : null);
+          if (tlock === 'acoustic' && !target) break;                           // nada barulhento por perto
           t.cd = P.reload * this.rl;
           const [dx, dy] = dirOf(this.ang), n = P.shots || 1;
-          const target = P.turn ? Battle.pickGuidedTarget(this) : null;
           for (let i = 0; i < n; i++) {
             const a = this.ang + (n > 1 ? (i - (n - 1) / 2) * (P.spread || 0) : 0), [bx, by] = dirOf(a);
             Battle.shoot({ kind: 'torp', x: wx + dx * CS * 0.8, y: wy + dy * CS * 0.8, vx: bx * P.speed + this.vx * 0.3, vy: by * P.speed + this.vy * 0.3,
-              ang: a, speed: P.speed, life: P.range / P.speed, dmg: P.dmg, team: this.team, owner: this.id, splash: P.splash, turn: P.turn || 0, target });
+              ang: a, speed: P.speed, life: P.range / P.speed, dmg: P.dmg, team: this.team, owner: this.id, splash: P.splash, turn: P.turn || 0, target, lock: tlock, wh: P.wh || '', splitAt: P.wh === 'split' ? P.range / P.speed - 1.0 : 0 });
           }
           SFX.play('torp', wx, wy); this.doReveal(900, 1.5);
         }
@@ -663,12 +675,12 @@ class Ship {
             if (dl < 60) break;
             gx = wx + dx0 * k; gy = wy + dy0 * k;
           } else {
-            target = Battle.pickGuidedTarget(this);
+            target = lock === 'arm' ? Battle.pickArmTarget(this) : Battle.pickGuidedTarget(this);
             if (!target) break;
           }
           t.cd = P.reload * this.rl; t.recoil = 1;
           const [dx, dy] = dirOf(this.ang);
-          Battle.shoot({ kind: 'missile', lock, size: P.size, x: wx + dx * CS * 0.8, y: wy + dy * CS * 0.8, ang: this.ang, speed: P.speed, vx: dx * P.speed, vy: dy * P.speed,
+          Battle.shoot({ kind: 'missile', lock, size: P.size, wh: P.wh || '', x: wx + dx * CS * 0.8, y: wy + dy * CS * 0.8, ang: this.ang, speed: P.speed, vx: dx * P.speed, vy: dy * P.speed,
             life: P.range / P.speed, dmg: P.dmg, splash: P.splash, turn: P.turn, team: this.team, owner: this.id, target, gx, gy, ownerShip: this });
           SFX.play('torp', wx, wy); this.doReveal(900, 1.5);
         }
@@ -720,7 +732,7 @@ class Ship {
             t.cd = P.reload; t.recoil = 1;
             Battle.addP({ t: 'tracer', x: wx, y: wy, x2: best.x, y2: best.y, life: 0.09 });
             if (best.drone) { if (Math.random() < 0.7) Battle.killDrone(best, 'pd'); }
-            else if (Math.random() < 0.8) { best.dead = true; Battle.explosion(best.x, best.y, 0.35); Battle.onShotGone(best); }
+            else if (Math.random() < (best.speed > 450 ? 0.4 : 0.8)) { best.dead = true; Battle.explosion(best.x, best.y, 0.35); Battle.onShotGone(best); }
           }
         } else t.ang = turnToward(t.ang, this.ang, 6 * dt);
         break;
@@ -760,7 +772,7 @@ class Ship {
         break;
       case 'jammer':
         for (const sh of Battle.shots)
-          if ((sh.kind === 'missile' || (sh.kind === 'torp' && sh.turn)) && sh.lock !== 'heat' && sh.lock !== 'gps' && sh.team !== this.team && !sh.dead && Math.hypot(sh.x - wx, sh.y - wy) < P.range) sh.jam = 1.5;
+          if ((sh.kind === 'missile' || (sh.kind === 'torp' && sh.turn)) && sh.lock !== 'heat' && sh.lock !== 'gps' && sh.lock !== 'arm' && sh.lock !== 'acoustic' && sh.team !== this.team && !sh.dead && Math.hypot(sh.x - wx, sh.y - wy) < P.range) sh.jam = 1.5;
         break;
       case 'repair': {
         t.acc += dt;
@@ -785,52 +797,77 @@ class Ship {
     }
   }
 
+  /** camadas estáticas do casco (corpo + sombra) pré-renderizadas em 2x; refeitas só quando uma célula muda de dano ou some */
+  sprites() {
+    let h = this.list.length;
+    for (const c of this.list) { const r = 1 - c.hp / c.maxHp; h = (h * 31 + (r > 0.8 ? 3 : r > 0.55 ? 2 : r > 0.25 ? 1 : 0) + c.gx * 7 + c.gy * 13) | 0; }
+    if (this.sprKey === h && this.spr) return;
+    this.sprKey = h;
+    const SC = 2, g = this.gb, w = (g.x1 - g.x0 + 1) * CS * SC, ht = (g.y1 - g.y0 + 1) * CS * SC;
+    if (!this.spr) { this.spr = document.createElement('canvas'); this.shd = document.createElement('canvas'); }
+    this.spr.width = this.shd.width = w; this.spr.height = this.shd.height = ht;       // (re)dimensionar também limpa
+    const a = this.spr.getContext('2d'), b = this.shd.getContext('2d');
+    a.setTransform(SC, 0, 0, SC, -g.x0 * CS * SC, -g.y0 * CS * SC);
+    b.setTransform(SC, 0, 0, SC, -g.x0 * CS * SC, -g.y0 * CS * SC); b.fillStyle = '#000';
+    for (const c of this.list) {
+      b.fillRect(c.gx * CS, c.gy * CS, CS, CS);
+      if (isBridge(c.base)) continue;                                 // a ponte tem animação (radar girando): desenhada ao vivo
+      const x = (c.gx + 0.5) * CS, y = (c.gy + 0.5) * CS;
+      a.translate(x, y); drawBase(a, c.base, CS, { dmg: 1 - c.hp / c.maxHp, flash: 0, seed: c.gx * 31 + c.gy * 17 + 1, time: 0 }); a.translate(-x, -y);
+    }
+  }
+
   draw(ctx, time) {
     let alpha = 1, scale = 1;
     if (this.sinking) { const k = this.sinkT / 2.8; alpha = 1 - k * 0.9; scale = 1 - k * 0.2; }
-    const ox = this.ox, oy = this.oy;
+    const ox = this.ox, oy = this.oy, g = this.gb;
     if (this.sig < 0.5) alpha *= 0.72;                    // casco furtivo: meio fantasma
     if (this.depth > 0) alpha *= 1 - 0.55 * this.depth;   // submerso: translúcido
+    this.sprites();
+    const sx0 = (g.x0 - ox) * CS, sy0 = (g.y0 - oy) * CS, sw = (g.x1 - g.x0 + 1) * CS, sh = (g.y1 - g.y0 + 1) * CS;
     ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.save();
-    ctx.translate(this.x + 6, this.y + 8); ctx.rotate(this.ang); ctx.scale(scale, scale);
-    ctx.fillStyle = this.depth > 0.5 ? 'rgba(0,0,0,0)' : 'rgba(0,0,0,0.25)';
-    for (const c of this.list) ctx.fillRect((c.gx - ox) * CS, (c.gy - oy) * CS, CS, CS);
-    ctx.restore();
-
+    if (this.depth <= 0.5) {                                            // sombra
+      ctx.save(); ctx.globalAlpha = alpha * 0.25;
+      ctx.translate(this.x + 6, this.y + 8); ctx.rotate(this.ang); ctx.scale(scale, scale);
+      ctx.drawImage(this.shd, sx0, sy0, sw, sh);
+      ctx.restore();
+    }
     ctx.translate(this.x, this.y); ctx.rotate(this.ang); ctx.scale(scale, scale);
+    const list = this.list;
     if (this.flame > 0.03) {
-      for (const c of this.list) {
+      for (const c of list) {
         if (!c.top || PARTS[c.top.type].kind !== 'engine') continue;
-        ctx.save(); ctx.translate((c.gx + 0.5 - ox) * CS, (c.gy + 0.5 - oy) * CS);
-        drawFlame(ctx, c.top.type, CS, this.flame, time); ctx.restore();
+        const x = (c.gx + 0.5 - ox) * CS, y = (c.gy + 0.5 - oy) * CS;
+        ctx.translate(x, y); drawFlame(ctx, c.top.type, CS, this.flame, time); ctx.translate(-x, -y);
       }
     }
-    for (const c of this.list) {
-      ctx.save(); ctx.translate((c.gx + 0.5 - ox) * CS, (c.gy + 0.5 - oy) * CS);
-      drawBase(ctx, c.base, CS, { dmg: 1 - c.hp / c.maxHp, flash: c.flash, seed: c.gx * 31 + c.gy * 17 + 1, time });
-      ctx.restore();
-    }
-    for (const c of this.list) {
+    ctx.drawImage(this.spr, sx0, sy0, sw, sh);                          // casco (em cache)
+    for (const c of list) {
+      const x = (c.gx + 0.5 - ox) * CS, y = (c.gy + 0.5 - oy) * CS;
+      if (isBridge(c.base)) { ctx.translate(x, y); drawBase(ctx, c.base, CS, { dmg: 1 - c.hp / c.maxHp, flash: c.flash, seed: c.gx * 31 + c.gy * 17 + 1, time }); ctx.translate(-x, -y); }
+      else if (c.flash > 0) { ctx.fillStyle = `rgba(255,255,255,${Math.min(0.7, c.flash * 5)})`; ctx.fillRect(x - CS / 2, y - CS / 2, CS, CS); }
       if (!c.top) continue;
-      ctx.save(); ctx.translate((c.gx + 0.5 - ox) * CS, (c.gy + 0.5 - oy) * CS);
+      ctx.translate(x, y);
       drawTop(ctx, c.top.type, CS, { ang: c.top.ang - this.ang, recoil: c.top.recoil, time, out: !!(c.top.drone && !c.top.drone.dead) });
       if (c.flash > 0) { ctx.fillStyle = `rgba(255,255,255,${Math.min(0.6, c.flash * 5)})`; ctx.fillRect(-CS / 2, -CS / 2, CS, CS); }
-      ctx.restore();
+      ctx.translate(-x, -y);
     }
-    // alagamento e fogo
-    for (const c of this.list) {
-      const x = (c.gx - ox) * CS, y = (c.gy - oy) * CS;
-      if (this.wet > 0.03) { ctx.fillStyle = `rgba(30,110,190,${(0.38 * this.wet).toFixed(3)})`; ctx.fillRect(x, y, CS, CS); }
-      if (c.fire > 0) { ctx.fillStyle = `rgba(255,${(110 + 60 * Math.sin(time * 14 + c.gx * 3 + c.gy)) | 0},30,0.38)`; ctx.fillRect(x, y, CS, CS); }
+    // alagamento e fogo (só quando houver)
+    const wet = this.wet > 0.03;
+    if (wet || this.burning > 0) {
+      for (const c of list) {
+        const x = (c.gx - ox) * CS, y = (c.gy - oy) * CS;
+        if (wet) { ctx.fillStyle = `rgba(30,110,190,${(0.38 * this.wet).toFixed(3)})`; ctx.fillRect(x, y, CS, CS); }
+        if (c.fire > 0) { ctx.fillStyle = `rgba(255,${(110 + 60 * Math.sin(time * 14 + c.gx * 3 + c.gy)) | 0},30,0.38)`; ctx.fillRect(x, y, CS, CS); }
+      }
     }
     // tripulação: só o dono e os aliados enxergam (para o inimigo ela é invisível)
-    if (this.team === Battle.player.team) {
-      for (const c of this.list) {
-        if (!c.crew) continue;
-        ctx.save(); ctx.translate((c.gx + 0.5 - ox) * CS, (c.gy + 0.5 - oy) * CS);
-        drawCrew(ctx, c.crew, CS, c.crewOn !== false); ctx.restore();
+    if (this.team === Battle.player.team && this.crewCells.length) {
+      for (const c of this.crewCells) {
+        if (c.dead) continue;
+        const x = (c.gx + 0.5 - ox) * CS, y = (c.gy + 0.5 - oy) * CS;
+        ctx.translate(x, y); drawCrew(ctx, c.crew, CS, c.crewOn !== false); ctx.translate(-x, -y);
       }
     }
     ctx.restore();
@@ -866,7 +903,7 @@ const Battle = {
   ships: [], shots: [], parts: [], player: null, cam: { x: 0, y: 0 }, shake: 0, time: 0,
   keys: new Set(), mouse: { x: 0, y: 0, left: false, right: false },
   wave: 1, state: 'idle', running: false, last: 0, clearTimer: 0, overTimer: 0,
-  runCoins: 0, kills: 0, design: null, hud: {}, mode: 'campaign', drones: [], flares: [], map: null, islands: [], env: null, envMul: 1, objMode: '', zoneState: null, objState: null, strikePt: null, respawnQ: [], mission: null, wxT: 0, bolt: 0, drops: [], noFog: false, friendlyFire: false, hostPaused: false, teamLast: {}, skirmish: null, localIds: new Set(), zoom: 1, shotSeq: 0, myDesign: null, cfg: null, deadNotice: false, contacts: new Map(), obs: [], aiAware: true, aiLast: { x: 0, y: 0 }, stealthT: 0,
+  runCoins: 0, kills: 0, design: null, hud: {}, mode: 'campaign', drones: [], flares: [], map: null, islands: [], env: null, envMul: 1, objMode: '', nukeT: 0, nukePos: null, zoneState: null, objState: null, strikePt: null, respawnQ: [], mission: null, wxT: 0, bolt: 0, drops: [], noFog: false, friendlyFire: false, hostPaused: false, teamLast: {}, skirmish: null, localIds: new Set(), zoom: 1, shotSeq: 0, myDesign: null, cfg: null, deadNotice: false, contacts: new Map(), obs: [], aiAware: true, aiLast: { x: 0, y: 0 }, stealthT: 0,
 
   init() {
     this.canvas = document.getElementById('game'); this.ctx = this.canvas.getContext('2d');
@@ -911,7 +948,8 @@ const Battle = {
     this.dpr = Math.min(2, window.devicePixelRatio || 1);
     this.W = window.innerWidth; this.H = window.innerHeight;
     this.canvas.width = this.W * this.dpr; this.canvas.height = this.H * this.dpr;
-    this.fogCv.width = this.W; this.fogCv.height = this.H;
+    this.fogS = 0.3;                                              // a névoa é suave: desenhada em baixa resolução e ampliada (bem mais barato)
+    this.fogCv.width = Math.max(2, Math.round(this.W * this.fogS)); this.fogCv.height = Math.max(2, Math.round(this.H * this.fogS));
   },
 
   /** marca (ou desmarca, se tocar no mesmo lugar) a região do ataque balístico */
@@ -1040,7 +1078,7 @@ const Battle = {
     const lag = clamp((Online.pingMs || 0) / 2000, 0, 0.3);
     const p = { kind: m.kind, id: m.id, owner: m.owner, team: m.team, x: m.x + m.vx * lag, y: m.y + m.vy * lag, vx: m.vx, vy: m.vy, life: m.life - lag,
       dmg: m.dmg, pierce: m.pierce, big: m.big, splash: m.splash, turn: m.turn, ang: m.ang, speed: m.speed, tx: m.tx, ty: m.ty, T: m.T, x0: m.x0, y0: m.y0,
-      fuse: m.fuse, dmgSurf: m.dmgSurf, arm: m.arm, age: 0, remoteOwned: true, lock: m.lk || undefined, size: m.sz || undefined, gx: m.gx || 0, gy: m.gy || 0 };
+      fuse: m.fuse, dmgSurf: m.dmgSurf, arm: m.arm, age: 0, remoteOwned: true, lock: m.lk || undefined, size: m.sz || undefined, gx: m.gx || 0, gy: m.gy || 0, wh: m.wh || '', splitAt: m.wh === 'split' ? m.life - 1.0 : 0 };
     if (p.lock === 'tele') p.lock = 'radar';                                        // sem o cursor do dono: o teleguiado vira radar nas outras telas
     if (m.kind === 'missile' || (m.kind === 'torp' && m.turn)) p.target = this.shipById(m.tg) || null;
     this.shots.push(p);
@@ -1156,7 +1194,8 @@ const Battle = {
 
   /* -------------------------------------------------------- utilidades */
   addP(o) {
-    if (this.parts.length > 1800) return;
+    if (this.parts.length > 1300) return;
+    if (o.t !== 'text' && this.W && (Math.abs(o.x - this.cam.x) > this.W / this.zoom / 2 + 350 || Math.abs(o.y - this.cam.y) > this.H / this.zoom / 2 + 350)) return;   // longe da tela: ninguém vê
     const p = Object.assign({ vx: 0, vy: 0, g: 0, r: 0, vr: 0, drag: 0, a: 1, layer: 1, s: 4 }, o);
     p.max = p.life; this.parts.push(p);
   },
@@ -1196,6 +1235,31 @@ const Battle = {
     const inp = ship.input;
     if (ship.ai) return this.nearestEnemy(ship, ship.x, ship.y, 1600);
     return this.nearestEnemy(ship, inp.aimX, inp.aimY, 450) || this.nearestEnemy(ship, ship.x, ship.y, 1600);
+  },
+  /** míssil anti-radiação: prefere quem tem radar/sonar (mais perto do cursor) */
+  pickArmTarget(ship) {
+    const inp = ship.input, rx = ship.ai ? ship.x : inp.aimX, ry = ship.ai ? ship.y : inp.aimY;
+    let best = null, bd = 1e9;
+    for (const s of this.ships) {
+      if (s.team === ship.team || s.sinking || s.dead || !this.canTarget(ship, s)) continue;
+      const emits = s.stats.radars + s.stats.sonars + s.stats.pings > 0 || s.pingT > 0;
+      const d = Math.hypot(s.x - rx, s.y - ry) + (emits ? 0 : 700);
+      if (d < bd && Math.hypot(s.x - ship.x, s.y - ship.y) < 1700) { bd = d; best = s; }
+    }
+    return best;
+  },
+  /** torpedo acústico: o navio mais barulhento perto (não precisa estar detectado; furtivo some) */
+  pickAcousticTarget(ref) {
+    let best = null, bs = 0;
+    for (const s of this.ships) {
+      if (s.team === ref.team || s.sinking || s.dead || s.sig < 0.35) continue;
+      const d = Math.hypot(s.x - ref.x, s.y - ref.y);
+      if (d > 1100) continue;
+      const noise = (s.quiet === undefined ? 1 : s.quiet) * (0.35 + Math.min(1, (s.speed || 0) / Math.max(60, s.stats.maxSpeed || 1)));
+      const sc = noise / (1 + d / 500);
+      if (sc > bs) { bs = sc; best = s; }
+    }
+    return best;
   },
   nearObserver(x, y, r) {
     for (const o of this.obs) if (Math.hypot(x - o.x, y - o.y) < r) return true;
@@ -1437,6 +1501,7 @@ const Battle = {
     this.meleeStep(dt);
     this.updateDrones(dt);
     this.updateFlares(dt);
+    if (this.nukeT > 0) this.nukeT = Math.max(0, this.nukeT - dt * 0.8);
     this.islandStep(dt);
     this.mapFx(dt);
 
@@ -1510,7 +1575,14 @@ const Battle = {
       if (p.kind === 'missile' || (p.kind === 'torp' && p.turn)) {
         this.steerMissile(p, dt);
         if (p.target && p.target.flare && Math.hypot(p.target.x - p.x, p.target.y - p.y) < 16) { p.dead = true; this.explosion(p.x, p.y, 0.4); continue; }   // enganado por um flare
+        if (p.wh === 'cluster' && p.target && !p.target.flare && Math.hypot(p.target.x - p.x, p.target.y - p.y) < 220) { this.burstCluster(p, p.target.x, p.target.y, 70); continue; }   // abre perto do alvo
       }
+      if (p.kind === 'torp' && p.splitAt && p.life <= p.splitAt) {                                // torpedo cacheiro: divide em 3
+        p.dead = true;
+        for (const da of [-0.28, 0, 0.28]) { const a = (p.ang || 0) + da, [bx, by] = dirOf(a); this.shots.push({ kind: 'torp', x: p.x, y: p.y, vx: bx * p.speed, vy: by * p.speed, ang: a, speed: p.speed, life: p.life, dmg: p.dmg, team: p.team, owner: p.owner, splash: p.splash, turn: 0, lock: '', wh: '' }); }
+        continue;
+      }
+      if (p.kind === 'torp' && p.wh === 'mag' && this.proxHit(p)) { p.dead = true; this.blast(p.x, p.y, p.splash, p.dmg, p.team, p.owner, 'mag'); this.onShotGone(p); continue; }
       if (p.kind === 'bullet' || p.kind === 'heavy') {                    // metralhadoras derrubam drones
         for (const dr of this.drones) {
           if (dr.dead || dr.team === p.team || Math.hypot(dr.x - p.x, dr.y - p.y) > 12) continue;
@@ -1540,7 +1612,8 @@ const Battle = {
         p.dead = true;
         if (p.kind === 'shell') this.splash(p.x, p.y, 1);
         else if (p.kind === 'bullet' || p.kind === 'heavy') this.splash(p.x, p.y, 0.4);
-        else if (p.kind === 'missile') this.explosion(p.x, p.y, 0.5);
+        else if (p.kind === 'missile') { if (p.wh === 'nuke') this.blast(p.x, p.y, p.splash, p.dmg, p.team, p.owner, 'nuke', null, false); else this.explosion(p.x, p.y, 0.5); }
+        else if (p.kind === 'torp' && p.wh === 'nuke') this.blast(p.x, p.y, p.splash, p.dmg, p.team, p.owner, 'nuke', null, true);
         continue;
       }
       if (p.kind === 'torp' && Math.random() < dt * 30)
@@ -1934,7 +2007,7 @@ const Battle = {
 
   /** efeito de uma bala em uma célula; retorna true se o projétil foi consumido */
   impactShot(p, s, c) {
-    if (p.kind === 'torp' || p.kind === 'missile') { this.blast(p.x, p.y, p.splash, p.dmg, p.team, p.owner, p.kind); return true; }
+    if (p.kind === 'torp' || p.kind === 'missile') return this.detonate(p, s, c);
     if (p.kind === 'rail') {
       const hs = p.hit || (p.hit = new Set());
       if (hs.has(c)) return false;
@@ -1948,10 +2021,53 @@ const Battle = {
     this.impact(p.x, p.y); s.hitCell(c, p.dmg, false, p.owner, p.kind); return true;
   },
 
+  /** ogivas especiais ao acertar uma célula */
+  detonate(p, s, c) {
+    const wh = p.wh || '';
+    if (wh === 'ap' && p.kind === 'missile') {                                   // perfurante: fere as 2 peças seguintes em linha
+      const sp = Math.hypot(p.vx, p.vy) || 1, ux = p.vx / sp, uy = p.vy / sp;
+      s.hitCell(c, p.dmg, false, p.owner, 'missile');
+      for (let k = 1; k <= 2; k++) { const c2 = s.cellAt(p.x + ux * CS * k, p.y + uy * CS * k); if (c2 && c2 !== c && !c2.dead) s.hitCell(c2, p.dmg * (k === 1 ? 0.75 : 0.5), false, p.owner, 'missile'); }
+      this.explosion(p.x, p.y, 0.5); this.blast(p.x, p.y, p.splash, p.dmg * 0.3, p.team, p.owner, 'missile');
+      return true;
+    }
+    if (wh === 'cluster') { this.burstCluster(p, p.x, p.y, 36); return true; }
+    this.blast(p.x, p.y, p.splash, p.dmg, p.team, p.owner, this.warKind(p), null, p.kind === 'torp' ? true : undefined);
+    return true;
+  },
+  warKind(p) { return p.wh === 'nuke' ? 'nuke' : p.wh === 'inc' ? 'inc' : p.wh === 'emp' ? 'emp' : (p.wh === 'mag' && p.kind === 'torp') ? 'mag' : p.kind; },
+  /** míssil de fragmentação: 5 submunições caem em área (criadas em todas as telas, sem retransmitir) */
+  burstCluster(p, cx, cy, spread) {
+    p.dead = true;
+    this.explosion(p.x, p.y, 0.4);
+    for (let i = 0; i < 5; i++) {
+      const a = rand(0, TAU), r = Math.sqrt(Math.random()) * spread;
+      this.shots.push({ kind: 'mortar', x: p.x, y: p.y, x0: p.x, y0: p.y, tx: cx + Math.cos(a) * r, ty: cy + Math.sin(a) * r, T: 0.5, life: 0.5 + i * 0.05, dmg: 3, splash: 28, team: p.team, owner: p.owner });
+    }
+  },
+  /** torpedo magnético: algum casco inimigo a menos de 38? */
+  proxHit(p) {
+    for (const s of this.ships) {
+      if (this.sameTeam(s, p.team, p.owner) || s.sinking || (s.remote && s.seenT <= 0)) continue;
+      if (Math.hypot(s.x - p.x, s.y - p.y) > s.radius + 40) continue;
+      for (const c of s.list) { if (c.dead) continue; const [wx, wy] = s.cellWorld(c); if (Math.hypot(wx - p.x, wy - p.y) < 38) return true; }
+    }
+    return false;
+  },
+  /** clarão e onda de uma explosão nuclear */
+  nukeFx(x, y, r) {
+    this.nukeT = 1; this.nukePos = { x, y, r };
+    for (let i = 0; i < 7; i++) this.explosion(x + rand(-r * 0.6, r * 0.6), y + rand(-r * 0.6, r * 0.6), rand(1.6, 3));
+    for (let k = 0; k < 3; k++) this.addP({ t: 'ring', x, y, life: 1.2 + k * 0.3, s: 10, g: r * (1.4 - k * 0.3), layer: 0 });
+    this.shake = Math.min(1, this.shake + 0.8 * clamp(1 - Math.hypot(x - this.player.x, y - this.player.y) / 1800, 0.1, 1));
+  },
+
   /** explosão em área: dano decai com a distância (casco reativo reduz pela metade) */
-  blast(x, y, radius, dmg, team, owner = null, kind = 'torp', dmgSurf = null) {
-    const under = kind === 'torp' || kind === 'mine' || kind === 'depth';      // só estes alcançam submarinos submersos
-    if (kind === 'depth') { this.splash(x, y, 2.2); this.explosion(x, y, 0.7); } else this.explosion(x, y, Math.max(0.6, radius / 25));
+  blast(x, y, radius, dmg, team, owner = null, kind = 'torp', dmgSurf = null, underArg) {
+    const under = underArg !== undefined ? underArg : (kind === 'torp' || kind === 'mine' || kind === 'depth' || kind === 'mag');      // só estes alcançam submarinos submersos
+    if (kind === 'depth') { this.splash(x, y, 2.2); this.explosion(x, y, 0.7); }
+    else if (kind === 'nuke') this.nukeFx(x, y, radius);
+    else this.explosion(x, y, clamp(radius / 25, 0.6, 4));
     const reach = radius + CS * 0.5;
     for (const s of this.ships) {
       if (this.sameTeam(s, team, owner) || s.sinking) continue;
@@ -1965,7 +2081,8 @@ const Battle = {
         if (d < reach) hits.push([c, d]);
       }
       for (const [c, d] of hits) s.hitCell(c, dm * (1 - 0.6 * d / reach), true, owner, kind);
-      if (under && hits.length) s.breach(kind === 'torp' ? 1.2 : kind === 'mine' ? 1.0 : 0.7);        // torpedo/mina/carga: rombo no casco
+      if ((kind === 'nuke' || kind === 'emp') && hits.length && !s.remote) { s.shield = 0; s.shieldHit = 6; s.stun(kind === 'nuke' ? 8 : 7); }      // zera o escudo e atordoa a tripulação
+      if (under && hits.length) s.breach(kind === 'torp' ? 1.2 : kind === 'mine' ? 1.0 : kind === 'mag' ? 2.2 : kind === 'nuke' ? 3 : 0.7);        // torpedo/mina/carga: rombo no casco
     }
   },
 
@@ -1974,10 +2091,10 @@ const Battle = {
     let tg = p.target;
     if (tg && tg.flare) { if (tg.dead || tg.life <= 0) tg = p.target = null; }
     else if (tg && (tg.sinking || tg.dead)) tg = p.target = null;
-    if (tg && !tg.flare && !p.remoteOwned && lock !== 'heat' && lock !== 'gps' && !(this.mode === 'online' ? (tg.team === this.player.team || this.visibleToMe(tg)) : this.teamSees(p.team, tg))) tg = p.target = null;
+    if (tg && !tg.flare && !p.remoteOwned && lock !== 'heat' && lock !== 'gps' && lock !== 'arm' && lock !== 'acoustic' && !(this.mode === 'online' ? (tg.team === this.player.team || this.visibleToMe(tg)) : this.teamSees(p.team, tg))) tg = p.target = null;
     const ownerLive = p.ownerShip && !p.remoteOwned && !p.ownerShip.dead && !p.ownerShip.sinking;
     const gpsOk = lock === 'gps' && (p.gx || p.gy);
-    if (!tg && !p.jam && !gpsOk && !(lock === 'tele' && ownerLive)) tg = p.target = this.nearestEnemy({ team: p.team }, p.x, p.y, lock === 'heat' ? 700 : 900);
+    if (!tg && !p.jam && !gpsOk && !(lock === 'tele' && ownerLive)) tg = p.target = lock === 'acoustic' ? this.pickAcousticTarget({ team: p.team, x: p.x, y: p.y }) : this.nearestEnemy({ team: p.team }, p.x, p.y, lock === 'heat' ? 700 : 900);
     if (lock === 'heat' && !(tg && tg.flare) && this.flares.length) {            // flares enganam o buscador de calor
       for (const f of this.flares) {
         if (f.team === p.team || f.dead || f.life <= 0) continue;
@@ -2001,6 +2118,7 @@ const Battle = {
     } else if (tg) {
       let tx = tg.x, ty = tg.y;
       if (lock === 'heat' && !tg.flare && tg.heatPoint) [tx, ty] = tg.heatPoint();      // mira no motor mais quente
+      else if (lock === 'arm' && tg.emitterPoint) [tx, ty] = tg.emitterPoint();          // mira no radar/sonar
       p.ang = turnToward(p.ang, Math.atan2(tx - p.x, -(ty - p.y)), p.turn * dt);
     }
     const [dx, dy] = dirOf(p.ang);
@@ -2139,53 +2257,56 @@ const Battle = {
   },
 
   /* ------------------------------------------------------------- HUD */
+  /** escreve no DOM só quando o valor muda */
+  hset(el, prop, v) { if (!el) return; const k = '_' + prop; if (el[k] !== v) { el[k] = v; if (prop === 'text') el.textContent = v; else if (prop === 'width') el.style.width = v; else if (prop === 'bg') el.style.background = v; else if (prop === 'disp') el.style.display = v; } },
   updateHud(alive) {
-    const h = this.hud, p = this.player;
+    if (this.time >= (this.hudLast || 0) && this.time - (this.hudLast || 0) < 0.066) return;       // o HUD atualiza ~15 vezes por segundo
+    this.hudLast = this.time;
+    const h = this.hud, p = this.player, hs = (el, prop, v) => this.hset(el, prop, v);
     if (this.objMode) this.hudObj();
-    h.wave.textContent = this.wave; h.enemies.textContent = alive; h.coins.textContent = this.runCoins;
+    hs(h.wave, 'text', this.wave); hs(h.enemies, 'text', alive); hs(h.coins, 'text', this.runCoins);
     const ratio = clamp(p.hullHp() / p.maxHullHp, 0, 1);
-    h['hp-fill'].style.width = (ratio * 100).toFixed(0) + '%';
-    h['hp-fill'].style.background = ratio > 0.6 ? '#3ecf8e' : ratio > 0.3 ? '#f5b942' : '#ff5d5d';
-    h['hp-text'].textContent = Math.round(ratio * 100) + '%';
-    h.speed.textContent = Math.round((p.speed || 0) / 5);
+    hs(h['hp-fill'], 'width', (ratio * 100).toFixed(0) + '%');
+    hs(h['hp-fill'], 'bg', ratio > 0.6 ? '#3ecf8e' : ratio > 0.3 ? '#f5b942' : '#ff5d5d');
+    hs(h['hp-text'], 'text', Math.round(ratio * 100) + '%');
+    hs(h.speed, 'text', Math.round((p.speed || 0) / 5));
     const w = p.weaponStatus();
     for (const k of ['cannon', 'mortar', 'torp']) {
-      h['row-' + k].style.display = w[k] === null ? 'none' : '';
-      if (w[k] !== null) h['cd-' + k].style.width = (w[k] * 100).toFixed(0) + '%';
+      hs(h['row-' + k], 'disp', w[k] === null ? 'none' : '');
+      if (w[k] !== null) hs(h['cd-' + k], 'width', (w[k] * 100).toFixed(0) + '%');
     }
-    h.vision.textContent = Math.round(p.vision);
-    h['row-stealth'].style.display = p.cover > 0 ? '' : 'none';
-    if (p.cover > 0) h['stealth-fill'].style.width = ((1 - p.sig) * 100).toFixed(0) + '%';
-    h['row-depth'].style.display = p.isSub ? '' : 'none';
-    h['row-batt'].style.display = p.isSub ? '' : 'none';
+    hs(h.vision, 'text', Math.round(p.vision));
+    hs(h['row-stealth'], 'disp', p.cover > 0 ? '' : 'none');
+    if (p.cover > 0) hs(h['stealth-fill'], 'width', ((1 - p.sig) * 100).toFixed(0) + '%');
+    hs(h['row-depth'], 'disp', p.isSub ? '' : 'none');
+    hs(h['row-batt'], 'disp', p.isSub ? '' : 'none');
     if (p.isSub) {
-      h['depth-fill'].style.width = (p.depth * 100).toFixed(0) + '%';
+      hs(h['depth-fill'], 'width', (p.depth * 100).toFixed(0) + '%');
       const bt = p.maxBattery ? p.battery / p.maxBattery : 0;
-      h['batt-fill'].style.width = (p.stats.nuclear ? 100 : bt * 100).toFixed(0) + '%';
-      h['batt-fill'].style.background = p.stats.nuclear ? '#8dffb0' : bt > 0.4 ? '#7bd86a' : bt > 0.15 ? '#f5b942' : '#ff5d5d';
+      hs(h['batt-fill'], 'width', (p.stats.nuclear ? 100 : bt * 100).toFixed(0) + '%');
+      hs(h['batt-fill'], 'bg', p.stats.nuclear ? '#8dffb0' : bt > 0.4 ? '#7bd86a' : bt > 0.15 ? '#f5b942' : '#ff5d5d');
     }
-    h['row-flood'].style.display = p.wet > 0.01 || p.leak > 0 ? '' : 'none';
+    hs(h['row-flood'], 'disp', p.wet > 0.01 || p.leak > 0 ? '' : 'none');
     if (p.wet > 0.01 || p.leak > 0) {
-      h['flood-fill'].style.width = (p.wet * 100).toFixed(0) + '%';
-      h['flood-fill'].style.background = p.wet > 0.7 ? '#ff5d5d' : p.wet > 0.4 ? '#f5b942' : '#4aa8ff';
+      hs(h['flood-fill'], 'width', (p.wet * 100).toFixed(0) + '%');
+      hs(h['flood-fill'], 'bg', p.wet > 0.7 ? '#ff5d5d' : p.wet > 0.4 ? '#f5b942' : '#4aa8ff');
     }
-    h['row-fire'].style.display = p.burning > 0 ? '' : 'none';
-    if (p.burning > 0) h['fire-text'].textContent = '🔥 ' + p.burning + ' peça(s) em chamas';
+    hs(h['row-fire'], 'disp', p.burning > 0 ? '' : 'none');
+    if (p.burning > 0) hs(h['fire-text'], 'text', '🔥 ' + p.burning + ' peça(s) em chamas');
     const crew = {};
     for (const c of p.crewCells) { const k = c.crew; crew[k] = crew[k] || [0, 0]; crew[k][1]++; if (!c.dead && c.crewOn !== false) crew[k][0]++; }
     const chips = Object.keys(crew).map(k => `<span class="crew-chip ${crew[k][0] ? '' : 'off'}" title="${CREW[k].name}">${CREW[k].icon}${crew[k][0]}/${crew[k][1]}</span>`).join('');
     if (chips !== this.crewHtml) { this.crewHtml = chips; h.crew.innerHTML = chips; }
-    h['row-ball'].style.display = w.ballistic === null ? 'none' : '';
-    if (w.ballistic !== null) { h['cd-ball'].style.width = (w.ballistic * 100).toFixed(0) + '%'; h['cd-ball'].style.background = this.strikePt ? '' : '#667'; }
-    const tball = document.getElementById('tbtn-ball');
-    if (tball) tball.classList.toggle('hidden', w.ballistic === null);
-    h['row-mine'].style.display = w.mine === null ? 'none' : '';
-    if (w.mine !== null) h['cd-mine'].style.width = (w.mine * 100).toFixed(0) + '%';
-    const tb = document.getElementById('tbtn-dive'), tm = document.getElementById('tbtn-aux');
-    if (tb) { tb.classList.toggle('hidden', !p.isSub); tb.firstChild.textContent = p.diveCmd ? '⬆' : '⬇'; }
-    if (tm) tm.classList.toggle('hidden', w.mine === null);
-    h['row-shield'].style.display = w.shield === null ? 'none' : '';
-    if (w.shield !== null) h['shield-fill'].style.width = (w.shield * 100).toFixed(0) + '%';
+    hs(h['row-ball'], 'disp', w.ballistic === null ? 'none' : '');
+    if (w.ballistic !== null) { hs(h['cd-ball'], 'width', (w.ballistic * 100).toFixed(0) + '%'); hs(h['cd-ball'], 'bg', this.strikePt ? '' : '#667'); }
+    const t = this.tbtn || (this.tbtn = { ball: document.getElementById('tbtn-ball'), dive: document.getElementById('tbtn-dive'), aux: document.getElementById('tbtn-aux') });
+    if (t.ball) t.ball.classList.toggle('hidden', w.ballistic === null);
+    hs(h['row-mine'], 'disp', w.mine === null ? 'none' : '');
+    if (w.mine !== null) hs(h['cd-mine'], 'width', (w.mine * 100).toFixed(0) + '%');
+    if (t.dive) { t.dive.classList.toggle('hidden', !p.isSub); hs(t.dive.firstChild, 'text', p.diveCmd ? '⬆' : '⬇'); }
+    if (t.aux) t.aux.classList.toggle('hidden', w.mine === null);
+    hs(h['row-shield'], 'disp', w.shield === null ? 'none' : '');
+    if (w.shield !== null) hs(h['shield-fill'], 'width', (w.shield * 100).toFixed(0) + '%');
   },
 
   /* ----------------------------------------------------------- render */
@@ -2250,6 +2371,10 @@ const Battle = {
 
     this.drawWeather();
     this.drawFog();
+    if (this.nukeT > 0) {
+      const np = this.nukePos, dist = Math.hypot(np.x - this.player.x, np.y - this.player.y), a = this.nukeT * clamp(1.15 - dist / (np.r * 5 + 900), 0, 1);
+      if (a > 0.01) { ctx.fillStyle = `rgba(255,252,235,${(a * 0.95).toFixed(3)})`; ctx.fillRect(0, 0, W, H); }
+    }
     this.drawBlips();
     this.drawIndicators();
     this.drawCrosshair();
@@ -2278,29 +2403,38 @@ const Battle = {
     }
   },
 
-  /** polígono da ilha com margens (praia, grama, centro) */
+  /** sprite estático da ilha (desenhado uma vez em 1,5x): águas rasas, praia, grama, detalhes */
+  islandSprite(isl) {
+    if (isl.cv && isl.cvEnv === this.env) return isl.cv;
+    const E = this.env || BIOMES.oceano, SC = 1.5, R = isl.r * 1.25, cv = document.createElement('canvas');
+    cv.width = cv.height = Math.ceil(R * 2 * SC);
+    const c = cv.getContext('2d');
+    c.setTransform(SC, 0, 0, SC, R * SC, R * SC);
+    const path = k => { c.beginPath(); isl.pts.forEach((p, i) => { const x = p[0] * k, y = p[1] * k; if (i) c.lineTo(x, y); else c.moveTo(x, y); }); c.closePath(); };
+    path(1.22); c.fillStyle = E.ice ? 'rgba(230,245,255,.18)' : 'rgba(150,235,230,.18)'; c.fill();
+    path(1.1); c.fillStyle = E.ice ? 'rgba(235,248,255,.28)' : 'rgba(170,240,235,.24)'; c.fill();
+    path(1.0); c.fillStyle = E.land[0]; c.fill(); c.strokeStyle = 'rgba(0,0,0,.25)'; c.lineWidth = 2; c.stroke();
+    path(0.82); c.fillStyle = E.land[1]; c.fill();
+    path(0.55); c.fillStyle = E.land[2]; c.fill();
+    let sd = isl.v | 0; const rnd = () => (sd = (sd * 1664525 + 1013904223) >>> 0) / 4294967296;
+    const n = Math.round(isl.r / 9);
+    for (let i = 0; i < n; i++) {
+      const a = rnd() * TAU, rr0 = Math.sqrt(rnd()) * isl.rc * 0.9, x = Math.cos(a) * rr0, y = Math.sin(a) * rr0;
+      if (E.ice) { c.strokeStyle = 'rgba(120,170,200,.45)'; c.lineWidth = 1.5; c.beginPath(); c.moveTo(x, y); c.lineTo(x + (rnd() - 0.5) * 40, y + (rnd() - 0.5) * 40); c.stroke(); }
+      else if (E.lava) { c.fillStyle = rnd() > 0.6 ? 'rgba(255,110,30,.65)' : '#1a1715'; c.beginPath(); c.arc(x, y, 3 + rnd() * 5, 0, TAU); c.fill(); }
+      else { c.fillStyle = rnd() > 0.25 ? 'rgba(20,70,30,.55)' : 'rgba(110,100,90,.8)'; c.beginPath(); c.arc(x, y, 4 + rnd() * 7, 0, TAU); c.fill(); }
+    }
+    isl.cv = cv; isl.cvEnv = this.env; isl.cvR = R;
+    return cv;
+  },
   drawIslands() {
     const ctx = this.ctx, E = this.env || BIOMES.oceano, z = this.zoom, t = this.time;
     const vw = this.W / z / 2 + 400, vh = this.H / z / 2 + 400;
     for (const isl of this.islands) {
       if (Math.abs(isl.x - this.cam.x) > vw + isl.r || Math.abs(isl.y - this.cam.y) > vh + isl.r) continue;
-      const path = k => { ctx.beginPath(); isl.pts.forEach((p, i) => { const x = isl.x + p[0] * k, y = isl.y + p[1] * k; if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); }); ctx.closePath(); };
-      // águas rasas (pulsam devagar)
-      path(1.22); ctx.fillStyle = E.ice ? 'rgba(230,245,255,.18)' : 'rgba(150,235,230,' + (0.16 + 0.04 * Math.sin(t * 1.3 + isl.v)).toFixed(3) + ')'; ctx.fill();
-      path(1.1); ctx.fillStyle = E.ice ? 'rgba(235,248,255,.28)' : 'rgba(170,240,235,.24)'; ctx.fill();
-      path(1.0); ctx.fillStyle = E.land[0]; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.lineWidth = 2; ctx.stroke();
-      path(0.82); ctx.fillStyle = E.land[1]; ctx.fill();
-      path(0.55); ctx.fillStyle = E.land[2]; ctx.fill();
-      // detalhes (árvores/rochas/rachaduras), determinísticos pela semente da ilha
-      let sd = isl.v | 0; const rnd = () => (sd = (sd * 1664525 + 1013904223) >>> 0) / 4294967296;
-      const n = Math.round(isl.r / 9);
-      for (let i = 0; i < n; i++) {
-        const a = rnd() * TAU, rr0 = Math.sqrt(rnd()) * isl.rc * 0.9, x = isl.x + Math.cos(a) * rr0, y = isl.y + Math.sin(a) * rr0;
-        if (E.ice) { ctx.strokeStyle = 'rgba(120,170,200,.45)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + (rnd() - 0.5) * 40, y + (rnd() - 0.5) * 40); ctx.stroke(); }
-        else if (E.lava) { ctx.fillStyle = rnd() > 0.6 ? 'rgba(255,110,30,' + (0.5 + 0.3 * Math.sin(t * 2 + i)).toFixed(2) + ')' : '#1a1715'; ctx.beginPath(); ctx.arc(x, y, 3 + rnd() * 5, 0, TAU); ctx.fill(); }
-        else { ctx.fillStyle = rnd() > 0.25 ? 'rgba(20,70,30,.55)' : 'rgba(110,100,90,.8)'; ctx.beginPath(); ctx.arc(x, y, 4 + rnd() * 7, 0, TAU); ctx.fill(); }
-      }
-      if (E.lava) {                                                                  // cratera brilhante
+      const cv = this.islandSprite(isl), R = isl.cvR;
+      ctx.drawImage(cv, isl.x - R, isl.y - R, R * 2, R * 2);
+      if (E.lava) {                                                                  // cratera brilhante (animada)
         const g = ctx.createRadialGradient(isl.x, isl.y, 2, isl.x, isl.y, isl.rc * 0.5);
         g.addColorStop(0, 'rgba(255,200,80,' + (0.7 + 0.2 * Math.sin(t * 3 + isl.v)).toFixed(2) + ')'); g.addColorStop(1, 'rgba(255,60,0,0)');
         ctx.fillStyle = g; ctx.beginPath(); ctx.arc(isl.x, isl.y, isl.rc * 0.5, 0, TAU); ctx.fill();
@@ -2466,9 +2600,9 @@ const Battle = {
   },
 
   drawParticles(layer) {
-    const ctx = this.ctx;
+    const ctx = this.ctx, vx = this.W / this.zoom / 2 + 60, vy = this.H / this.zoom / 2 + 60, cx = this.cam.x, cy = this.cam.y;
     for (const p of this.parts) {
-      if (p.layer !== layer || !this.inVision(p.x, p.y)) continue;
+      if (p.layer !== layer || Math.abs(p.x - cx) > vx || Math.abs(p.y - cy) > vy || !this.inVision(p.x, p.y)) continue;
       const k = p.life / p.max;
       if (!(p.s >= 0)) p.s = 0;
       switch (p.t) {
@@ -2524,18 +2658,19 @@ const Battle = {
   /** escuridão fora do alcance de visão (buracos suaves ao redor de cada observador) */
   drawFog() {
     if (this.noFog) return;
-    const f = this.fogCtx, W = this.W, H = this.H;
+    const f = this.fogCtx, W = this.W, H = this.H, S = this.fogS || 0.3, fw = this.fogCv.width, fh = this.fogCv.height;
     f.setTransform(1, 0, 0, 1, 0, 0); f.globalCompositeOperation = 'source-over';
-    f.clearRect(0, 0, W, H); f.fillStyle = 'rgba(3,10,24,0.80)'; f.fillRect(0, 0, W, H);
+    f.clearRect(0, 0, fw, fh); f.fillStyle = 'rgba(3,10,24,0.80)'; f.fillRect(0, 0, fw, fh);
     f.globalCompositeOperation = 'destination-out';
     for (const o of this.obs) {
-      const z = this.zoom, x = (o.x - this.cam.x) * z + W / 2, y = (o.y - this.cam.y) * z + H / 2, r = o.vision * z;
+      const z = this.zoom * S, x = (o.x - this.cam.x) * z + fw / 2, y = (o.y - this.cam.y) * z + fh / 2, r = o.vision * z;
+      if (x + r < 0 || y + r < 0 || x - r > fw || y - r > fh) continue;      // fora da tela
       const g = f.createRadialGradient(x, y, r * 0.55, x, y, r);
       g.addColorStop(0, 'rgba(0,0,0,1)'); g.addColorStop(1, 'rgba(0,0,0,0)');
       f.fillStyle = g; f.beginPath(); f.arc(x, y, r, 0, TAU); f.fill();
     }
     f.globalCompositeOperation = 'source-over';
-    this.ctx.drawImage(this.fogCv, 0, 0, W, H);
+    this.ctx.drawImage(this.fogCv, 0, 0, fw, fh, 0, 0, W, H);
   },
 
   /** contatos que só o sonar (ou uma revelação) mostra: silhueta vermelha dentro da escuridão */
@@ -2578,16 +2713,28 @@ const Battle = {
     ctx.restore();
   },
 
-  drawMinimap() {
-    const c = this.mctx, S = this.mini.width, k = S / WORLD;
-    c.clearRect(0, 0, S, S);
+  buildMiniBg(S, k) {
+    const cv = this.miniBg || (this.miniBg = document.createElement('canvas'));
+    cv.width = cv.height = S;
+    const c = cv.getContext('2d'), E = this.env || BIOMES.oceano;
     c.fillStyle = 'rgba(8,24,44,.75)'; c.fillRect(0, 0, S, S);
     c.strokeStyle = 'rgba(255,93,74,.7)'; c.lineWidth = 2; c.strokeRect(1, 1, S - 2, S - 2);
-    const E = this.env || BIOMES.oceano;
-    for (const isl of this.islands) {                                  // ilhas
+    for (const isl of this.islands) {
       c.beginPath(); isl.pts.forEach((p, i) => { const x = (isl.x + p[0] + HALF) * k, y = (isl.y + p[1] + HALF) * k; if (i) c.lineTo(x, y); else c.moveTo(x, y); }); c.closePath();
       c.fillStyle = E.ice ? 'rgba(235,245,255,.85)' : E.lava ? 'rgba(150,70,40,.9)' : 'rgba(150,185,110,.85)'; c.fill();
     }
+    if (this.map && this.map.route.length) {
+      c.strokeStyle = 'rgba(255,214,102,.8)'; c.lineWidth = 2; c.setLineDash([4, 3]); c.beginPath();
+      this.map.route.forEach((p, i) => { const x = (p[0] + HALF) * k, y = (p[1] + HALF) * k; if (i) c.lineTo(x, y); else c.moveTo(x, y); }); c.stroke(); c.setLineDash([]);
+      const e = this.map.route[this.map.route.length - 1]; c.fillStyle = '#ffd666'; c.fillRect((e[0] + HALF) * k - 3, (e[1] + HALF) * k - 3, 6, 6);
+    }
+    this.miniKey = this.map; this.miniS = S;
+  },
+  drawMinimap() {
+    const c = this.mctx, S = this.mini.width, k = S / WORLD;
+    c.clearRect(0, 0, S, S);
+    if (this.miniKey !== this.map || this.miniS !== S) this.buildMiniBg(S, k);                       // fundo (mar, ilhas, rota) em cache
+    c.drawImage(this.miniBg, 0, 0);
     if (this.map) {
       const zs = (this.mode === 'online' ? (this.objState && this.objState.z) : (this.zoneState && this.zoneState.z)) || [];
       this.map.zones.forEach((zn, i) => {
@@ -2595,11 +2742,6 @@ const Battle = {
         c.strokeStyle = st.owner ? (st.owner === this.player.team ? '#5fe08a' : '#ff5d5d') : '#cfe3f5'; c.lineWidth = 2;
         c.beginPath(); c.arc((zn.x + HALF) * k, (zn.y + HALF) * k, zn.r * k, 0, TAU); c.stroke();
       });
-      if (this.map.route.length) {
-        c.strokeStyle = 'rgba(255,214,102,.8)'; c.lineWidth = 2; c.setLineDash([4, 3]); c.beginPath();
-        this.map.route.forEach((p, i) => { const x = (p[0] + HALF) * k, y = (p[1] + HALF) * k; if (i) c.lineTo(x, y); else c.moveTo(x, y); }); c.stroke(); c.setLineDash([]);
-        const e = this.map.route[this.map.route.length - 1]; c.fillStyle = '#ffd666'; c.fillRect((e[0] + HALF) * k - 3, (e[1] + HALF) * k - 3, 6, 6);
-      }
     }
     for (const o of this.obs) {                                       // círculos de visão
       c.fillStyle = 'rgba(120,200,255,.10)'; c.strokeStyle = 'rgba(120,200,255,.35)'; c.lineWidth = 1;

@@ -62,7 +62,7 @@ const Online = {
       if (sel.value === 'meu') m.design = Builder.getDesign();
       this.send(m);
     };
-    for (const id of ['lb-mode', 'lb-budget', 'lb-kills', 'lb-min', 'lb-max', 'lb-resp', 'lb-arena', 'lb-fog', 'lb-ff', 'lb-sub', 'lb-stealth', 'lb-guided', 'lb-lock', 'lb-env', 'lb-isl', 'lb-score', 'lb-lives'])
+    for (const id of ['lb-mode', 'lb-budget', 'lb-kills', 'lb-min', 'lb-max', 'lb-resp', 'lb-arena', 'lb-fog', 'lb-ff', 'lb-sub', 'lb-stealth', 'lb-guided', 'lb-nuke', 'lb-lock', 'lb-env', 'lb-isl', 'lb-score', 'lb-lives'])
       $(id).onchange = () => this.send({ t: 'settings', settings: this.formSettings('lb') });
     $('lb-pass').onchange = () => this.send({ t: 'settings', settings: Object.assign(this.formSettings('lb'), { pass: $('lb-pass').value.trim(), setPass: true }) });
     $('ht-fill').onclick = () => this.send({ t: 'fillBots', n: 8, diff: $('ba-diff').value });
@@ -79,6 +79,7 @@ const Online = {
     const o = { mode: $('mode').value, budget: +$('budget').value, killLimit: +$('kills').value, minutes: +$('min').value };
     const num = (id, key) => { const e = $(id); if (e) o[key] = +e.value; };
     const chk = (id, key) => { const e = $(id); if (e) o[key] = e.checked; };
+    chk('nuke', 'allowNuke');
     num('max', 'maxPlayers'); num('resp', 'respawn'); num('arena', 'arena'); num('isl', 'islands'); num('score', 'scoreLimit'); num('lives', 'cargoLives');
     { const e = $('env'); if (e) o.env = e.value; }
     chk('fog', 'fog'); chk('ff', 'ff'); chk('sub', 'allowSub'); chk('stealth', 'allowStealth'); chk('guided', 'allowGuided'); chk('lock', 'locked');
@@ -123,13 +124,13 @@ const Online = {
     $('lb-env').value = S.env || 'rand'; $('lb-isl').value = String(S.islands == null ? 2 : S.islands); $('lb-score').value = String(S.scoreLimit || 300); $('lb-lives').value = String(S.cargoLives || 3);
     $('lb-score-wrap').style.display = S.mode === 'zone' ? '' : 'none'; $('lb-lives-wrap').style.display = S.mode === 'convoy' ? '' : 'none'; $('lb-kills-wrap').style.display = om ? 'none' : '';
     $('lb-fog').checked = S.fog !== false; $('lb-ff').checked = !!S.ff; $('lb-sub').checked = S.allowSub !== false;
-    $('lb-stealth').checked = S.allowStealth !== false; $('lb-guided').checked = S.allowGuided !== false; $('lb-lock').checked = !!S.locked;
+    $('lb-nuke').checked = S.allowNuke !== false; $('lb-stealth').checked = S.allowStealth !== false; $('lb-guided').checked = S.allowGuided !== false; $('lb-lock').checked = !!S.locked;
     if (document.activeElement !== $('lb-pass')) $('lb-pass').value = '';
     $('lb-pass').placeholder = S.hasPass ? '(senha definida — digite para trocar)' : 'sem senha';
-    for (const id of ['lb-mode', 'lb-budget', 'lb-kills', 'lb-min', 'lb-max', 'lb-resp', 'lb-arena', 'lb-fog', 'lb-ff', 'lb-sub', 'lb-stealth', 'lb-guided', 'lb-lock', 'lb-pass', 'lb-env', 'lb-isl', 'lb-score', 'lb-lives']) $(id).disabled = !host;
+    for (const id of ['lb-mode', 'lb-budget', 'lb-kills', 'lb-min', 'lb-max', 'lb-resp', 'lb-arena', 'lb-fog', 'lb-ff', 'lb-sub', 'lb-stealth', 'lb-guided', 'lb-nuke', 'lb-lock', 'lb-pass', 'lb-env', 'lb-isl', 'lb-score', 'lb-lives']) $(id).disabled = !host;
     $('lb-ff').disabled = !host || !teams;
     $('lobby-flags').textContent = [S.mode === 'zone' ? '🏁 Controle de Zona' : S.mode === 'convoy' ? '🚢 Comboio (A defende, B ataca)' : '', '🗺 ' + (S.env === 'rand' || !BIOMES[S.env] ? 'ambiente aleatório' : BIOMES[S.env].name), S.locked ? '🔒 sala trancada' : '', S.hasPass ? '🔑 com senha' : '', S.fog === false ? '👁 sem névoa' : '', S.ff ? '💥 fogo amigo' : '',
-      S.allowSub === false ? '🚫 submarinos' : '', S.allowStealth === false ? '🚫 furtivo' : '', S.allowGuided === false ? '🚫 guiadas' : ''].filter(Boolean).join(' · ');
+      S.allowSub === false ? '🚫 submarinos' : '', S.allowStealth === false ? '🚫 furtivo' : '', S.allowGuided === false ? '🚫 guiadas' : '', S.allowNuke === false ? '🚫 nuclear' : ''].filter(Boolean).join(' · ');
     $('lobby-players').innerHTML = r.players.map(p => {
       const isHostRow = p.id === r.host;
       const teamBadge = teams ? (host ? `<button class="team t${p.team} tbtn-team" data-team="${p.id}" data-cur="${p.team}" title="Trocar de equipe">Equipe ${p.team} ⇄</button>` : `<span class="team t${p.team}">Equipe ${p.team}</span>`) : '';
@@ -420,7 +421,7 @@ const Online = {
   },
 
   sendShot(s, as) {
-    this.send({ t: 'shot', as: as || undefined, lk: s.lock || '', sz: s.size || '', gx: Math.round(s.gx || 0), gy: Math.round(s.gy || 0), kind: s.kind, id: s.id, x: +s.x.toFixed(1), y: +s.y.toFixed(1), vx: +(s.vx || 0).toFixed(1), vy: +(s.vy || 0).toFixed(1),
+    this.send({ t: 'shot', as: as || undefined, lk: s.lock || '', wh: s.wh || '', sz: s.size || '', gx: Math.round(s.gx || 0), gy: Math.round(s.gy || 0), kind: s.kind, id: s.id, x: +s.x.toFixed(1), y: +s.y.toFixed(1), vx: +(s.vx || 0).toFixed(1), vy: +(s.vy || 0).toFixed(1),
       life: +s.life.toFixed(2), dmg: s.dmg, pierce: s.pierce || 0, big: !!s.big, splash: s.splash || 0, turn: s.turn || 0, ang: s.ang || 0, speed: s.speed || 0,
       tx: s.tx || 0, ty: s.ty || 0, T: s.T || 0, x0: s.x0 || 0, y0: s.y0 || 0, fuse: s.fuse || 0, dmgSurf: s.dmgSurf || 0, arm: s.arm || 0, tg: s.target ? s.target.id : '' });
   },

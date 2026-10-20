@@ -19,7 +19,8 @@ const MAX_ROOMS = 60;
 const SHOT_KINDS = new Set(['shell', 'bullet', 'heavy', 'flame', 'rail', 'mortar', 'torp', 'missile', 'mine', 'depth', 'ballistic']);
 const LOUD_SHOTS = new Set(['shell', 'rail', 'mortar', 'torp', 'missile', 'ballistic']);
 const DRONE_KINDS = ['recon', 'attack', 'kamikaze', 'escort', 'bomber', 'torpedo', 'swarm', 'aew'];
-const LOCK_KINDS = ['radar', 'heat', 'gps', 'tele'];   // revelam quem atira
+const LOCK_KINDS = ['radar', 'heat', 'gps', 'tele', 'arm', 'acoustic'];
+const WARHEADS = ['nuke', 'cluster', 'ap', 'inc', 'emp', 'sonic', 'arm', 'mag', 'split', 'acoustic'];   // revelam quem atira
 
 function createGameServer() {
 const rooms = new Map();
@@ -60,6 +61,7 @@ function cleanSettings(s, old, minPlayers = 2) {
     allowSub: bool(s.allowSub, o.allowSub !== undefined ? o.allowSub : true),
     allowStealth: bool(s.allowStealth, o.allowStealth !== undefined ? o.allowStealth : true),
     allowGuided: bool(s.allowGuided, o.allowGuided !== undefined ? o.allowGuided : true),
+    allowNuke: bool(s.allowNuke, o.allowNuke !== undefined ? o.allowNuke : true),
     env: (s.env === 'rand' || G.BIOME_KEYS.includes(s.env)) ? s.env : (o.env || 'rand'),
     islands: pick(s.islands, [0, 1, 2, 3], o.islands !== undefined ? o.islands : 2),
     scoreLimit: pick(s.scoreLimit, [100, 200, 300, 500], o.scoreLimit || 300),
@@ -453,12 +455,13 @@ function onMessage(p, raw) {
       for (const k of vals) if (!Number.isFinite(+m[k])) return;
       if (m.kind === 'ballistic' && !(p.stats && p.stats.ballistics)) return;
       if (m.kind === 'missile' && !(p.stats && p.stats.missiles)) return;
+      if (m.wh === 'nuke' && !(p.stats && p.stats.nukes)) return;
       const sh = { t: 'shot', kind: m.kind, id: clean(m.id, 24), owner: p.id, team: p.team,
-        x: +m.x, y: +m.y, vx: num(m.vx, -1500, 1500), vy: num(m.vy, -1500, 1500), life: num(m.life, 0, 14), dmg: num(m.dmg, 0, 16),
-        pierce: num(m.pierce, 0, 4), big: !!m.big, splash: num(m.splash, 0, 130), turn: num(m.turn, 0, 4), ang: num(m.ang, -50, 50), speed: num(m.speed, 0, 1200),
+        x: +m.x, y: +m.y, vx: num(m.vx, -1500, 1500), vy: num(m.vy, -1500, 1500), life: num(m.life, 0, 14), dmg: num(m.dmg, 0, 60),
+        pierce: num(m.pierce, 0, 4), big: !!m.big, splash: num(m.splash, 0, 260), turn: num(m.turn, 0, 4), ang: num(m.ang, -50, 50), speed: num(m.speed, 0, 1200),
         tx: num(m.tx, -4000, 4000), ty: num(m.ty, -4000, 4000), T: num(m.T, 0, 14), x0: num(m.x0, -4000, 4000), y0: num(m.y0, -4000, 4000), tg: clean(m.tg, 12),
         fuse: num(m.fuse, 0, 4), dmgSurf: num(m.dmgSurf, 0, 16), arm: num(m.arm, 0, 6),
-        lk: LOCK_KINDS.includes(m.lk) ? m.lk : '', sz: ['S', 'M', 'L', 'G'].includes(m.sz) ? m.sz : '', gx: num(m.gx, -4000, 4000), gy: num(m.gy, -4000, 4000) };
+        lk: LOCK_KINDS.includes(m.lk) ? m.lk : '', wh: WARHEADS.includes(m.wh) ? m.wh : '', sz: ['S', 'M', 'L', 'G'].includes(m.sz) ? m.sz : '', gx: num(m.gx, -4000, 4000), gy: num(m.gy, -4000, 4000) };
       if (LOUD_SHOTS.has(m.kind)) { p.revealUntil = now + 1500; p.revealR = 900; }
       const s = JSON.stringify(sh);
       for (const q of r.players.values()) {

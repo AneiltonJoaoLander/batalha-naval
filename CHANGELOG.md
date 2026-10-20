@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.9.1 — mais mísseis, mais torpedos e otimização
+**Mísseis de cruzeiro novos**
+- **Nuclear:** ogiva de 230 de raio; incendeia tudo, atordoa a tripulação, zera escudos e cega a tela com um clarão. Lento (recarga de 60 s), a defesa pontual pode derrubá-lo.
+- **Fragmentação** (5 submunições em área), **Perfurante** (fere as 2 peças seguintes), **Incendiário** (napalm), **EMP** (zera escudo e atordoa 7 s), **Supersônico** (a defesa pontual falha mais) e **Anti-radiação** (caça radar e sonar, mira no equipamento).
+**Torpedos novos**
+- **Mini-torpedos** (2 por salva), **Acústico** (trava no navio mais barulhento, até submarinos que você não vê), **Magnético** (explode sob o casco com rombo maior), **Cacheiro** (divide em 3 depois de 1 s) e **Nuclear submarino** (240 de raio, atinge submarinos).
+- Novos modelos prontos: **Cruzador Tático** e **Submarino Acústico**.
+**Online**
+- Nova regra da sala: **Permitir armas nucleares** (o servidor recusa projetos e disparos nucleares quando proibido); as ogivas especiais são repassadas e validadas.
+**Desempenho**
+- Névoa de guerra desenhada em baixa resolução e ampliada (era o maior custo por quadro).
+- Navios com casco e sombra em cache (refeitos só quando uma peça muda), ilhas em sprite, fundo do minimapa em cache.
+- Colisão tiro × casco por grade numérica (sem montar texto por teste), partículas fora da tela descartadas, HUD atualizado a ~15 Hz e só quando o valor muda.
+- Resultado no teste de estresse (11 navios, ilhas, drones): de ~11,3 ms para ~7 ms por quadro.
+
 ## v1.9.0 — mísseis, balísticos, drones, ilhas e novos modos
 **Armas**
 - **Mísseis de cruzeiro antinavio:** leve / médio / pesado × lock **radar**, **térmico**, **GPS** e **teleguiado** (12 modelos). O térmico mira no motor mais potente do alvo; o GPS vai às coordenadas do cursor; o teleguiado segue o cursor.
