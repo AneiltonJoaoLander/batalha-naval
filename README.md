@@ -1,4 +1,4 @@
-# ⚓ Batalha Naval — v1.8
+# ⚓ Batalha Naval — v1.8.1
 
 Monte seu navio **peça por peça** numa grade (casco, armas, motores, aletas, sensores…) e lute contra ondas de inimigos
 ou contra outros jogadores **online**. Funciona no computador e no **celular** (instalável como app).

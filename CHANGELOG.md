@@ -1,5 +1,8 @@
 # Changelog
 
+## v1.8.1 — correção
+- **Corrigido:** no modo online sem servidor, o anfitrião não conseguia iniciar a partida quando havia outro jogador humano na sala (a função que esconde a tripulação inimiga não existia no navegador). Partidas só com bots já funcionavam.
+
 ## v1.8.0 — combate de perto, alagamento, fogo, drones e tripulação
 - **Armas de corpo a corpo:** Espinhos, Serra Giratória, Aríete, Gancho de Abordagem (reduz a velocidade do alvo) e Bobina de Choque (atordoa peças).
 - **Cascos e blindagens:** Casco Cerâmico, de Titânio, Compartimentado (vaza menos), Flutuante (aguenta mais água), Corta-fogo, e placas de convés (Aço e Reativa).

@@ -9,7 +9,7 @@
    A proa (frente) do navio aponta para CIMA da grade.
    ===================================================================== */
 
-const VERSION = '1.8.0';
+const VERSION = '1.8.1';
 const GRID_W = 13;
 const GRID_H = 17;
 const BASE_BUDGET = 220;

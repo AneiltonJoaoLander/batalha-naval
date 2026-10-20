@@ -12,7 +12,7 @@
 (function (root) {
 const G = (typeof module !== 'undefined' && module.exports)
   ? require('./parts.js')
-  : { VERSION, DEEP, PRESETS, validateDesign, detects };                       // globais de parts.js no navegador
+  : { VERSION, DEEP, PRESETS, validateDesign, detects, stripCrew };                     // globais de parts.js no navegador
 
 const MAX_PLAYERS = 8;
 const MAX_ROOMS = 60;
