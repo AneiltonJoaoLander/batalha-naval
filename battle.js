@@ -61,6 +61,12 @@ const SFX = {
   },
 };
 
+/* vizinhança 4 e chances de incêndio */
+const N4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+const FIRE_CH = { shell: 0.16, heavy: 0.08, bullet: 0.03, flame: 0.02, rail: 0.05, mortar: 0.28, torp: 0.3, missile: 0.34, mine: 0.3, depth: 0.1, melee: 0.05, cook: 0.35, bomb: 0.2 };
+const FLAMMABLE = { engine: 1.8, torp: 1.6, missile: 1.6, mortar: 1.5, cannon: 1.3, depth: 1.4, mine: 1.3, mg: 1.1, repair: 0.8, shield: 0.6 };
+const AMMO = new Set(['torp', 'missile', 'mortar', 'depth', 'mine']);
+
 /* ----------------------------------------------------------------- NAVIO */
 class Ship {
   constructor(design, team, x, y, ang) {
@@ -75,14 +81,15 @@ class Ship {
     for (let gy = 0; gy < GRID_H; gy++) for (let gx = 0; gx < GRID_W; gx++) {
       const base = design.hull[gy][gx]; if (!base) continue;
       const P = PARTS[base];
-      const cell = { gx, gy, base, hp: P.hp, maxHp: P.hp, flash: 0, top: null, dead: false };
+      const cell = { gx, gy, base, hp: P.hp, maxHp: P.hp, flash: 0, top: null, dead: false,
+        crew: (isHull(base) && design.crew && design.crew[gy] && design.crew[gy][gx]) || null, crewOn: true, fire: 0, fireBy: null, stun: 0 };
       const tc = design.top[gy][gx];
       if (tc && isHull(base) && !isBridge(base)) {
         const TP = PARTS[tc];
         cell.top = { type: tc, hp: TP.hp, maxHp: TP.hp, cd: rand(0, 0.6), ang, recoil: 0, acc: 0, tgt: null, tt: 0 };
       }
       this.cells.set(gx + ',' + gy, cell); this.order.push(gx + ',' + gy);
-      all.push({ base, top: cell.top ? tc : null });
+      all.push({ base, top: cell.top ? tc : null, crew: cell.crew });
       if (isHull(base)) { sx += gx + 0.5; sy += gy + 0.5; n++; hp += P.hp; }
     }
     this.ox = sx / n; this.oy = sy / n;
@@ -91,6 +98,7 @@ class Ship {
     this.input = { throttle: 0, steer: 0, aimX: x, aimY: y, fireMain: false, fireTorp: false, fireMissile: false, fireAux: false, dive: false };
     this.shield = 0; this.shieldHit = 0; this.shieldFlash = 0; this.label = '';
     this.depth = 0; this.diveCmd = false; this.battery = 0; this.sub = false; this.quiet = 1; this.visMul = 1;
+    this.water = 0; this.leak = 0; this.wet = 0; this.fx = {}; this.hooked = 0; this.crewT = 0; this.fireT = 1; this.healT = 1; this.burning = 0; this.sensorMul = 1; this.floodCap = 30;
     this.ai = null; this.reloadMul = 1; this.smokeT = 0; this.wakeT = 0;
     this.ca = Math.cos(ang); this.sa = Math.sin(ang);
     this.refresh();
@@ -99,7 +107,7 @@ class Ship {
 
   refresh() {
     this.list = [...this.cells.values()];
-    this.stats = shipStats(this.list.map(c => ({ base: c.base, top: c.top ? c.top.type : null })));
+    this.stats = shipStats(this.list.map(c => ({ base: c.base, top: c.top ? c.top.type : null, crew: c.crew })));
     let r = 0, bow = null, hw = 0, hl = 0, maxR = 0, mgR = 0, flame = false;
     for (const c of this.list) {
       const lx = (c.gx + 0.5 - this.ox) * CS, ly = (c.gy + 0.5 - this.oy) * CS;
@@ -115,16 +123,19 @@ class Ship {
     this.radius = r; this.bow = bow; this.hw = hw; this.hl = hl;
     this.maxRange = maxR; this.mgRange = mgR;
     this.hasTorp = this.stats.torps > 0;
-    this.rammer = !maxR && !this.stats.torps && !this.stats.missiles && flame;
+    this.rammer = !maxR && !this.stats.torps && !this.stats.missiles && (flame || this.stats.melee > 0);
     this.shieldMax = this.stats.shield;
     this.shield = Math.min(this.shield, this.shieldMax);
     // sensores e furtividade (os mesmos campos que detects() lê)
-    this.vision = this.stats.vision * this.visMul; this.sonar = this.stats.sonarR; this.pingR = this.stats.pingR;
+    this.vision = this.stats.vision * this.visMul * this.sensorMul; this.sonar = this.stats.sonarR * this.sensorMul; this.pingR = this.stats.pingR * this.sensorMul;
     this.sig = this.stats.sig; this.cover = this.stats.cover;
     this.isSub = this.stats.sub; this.maxBattery = this.stats.battery; this.battery = Math.min(this.battery, this.maxBattery);
+    this.crewCells = this.list.filter(c => c.crew);
+    this.meleeCells = this.list.filter(c => c.top && PARTS[c.top.type].kind === 'melee');
+    this.floodCap = this.initialHull * 3 + 6 * this.stats.floats;
   }
 
-  get rl() { return this.reloadMul * this.stats.loadMul; }
+  get rl() { return this.reloadMul * this.stats.loadMul / (1 + 0.2 * (this.fx.g || 0)); }
 
   /** denuncia a posição: quem estiver a menos de r percebe este navio por t segundos */
   doReveal(r, t) { this.revealT = Math.max(this.revealT, t); this.revealR = Math.max(this.revealR, r); }
@@ -143,20 +154,29 @@ class Ship {
   hullHp() { let s = 0; for (const c of this.list) if (isHull(c.base)) s += c.hp; return s; }
 
   /** blast = dano de explosão (o casco reativo reduz); soak = redução fixa da blindagem */
-  hitCell(c, dmg, blast = false, owner = null) {
+  hitCell(c, dmg, blast = false, owner = null, src = null) {
     if (this.sinking || c.dead) return;
     c.flash = 0.12;
     if (this.remote) return;                      // navios remotos: só o dono aplica o dano
     if (owner) this.lastAttacker = owner;
-    if (this.shield > 0) {
+    if (this.shield > 0 && src !== 'fire') {
       const a = Math.min(this.shield, dmg);
       this.shield -= a; dmg -= a; this.shieldHit = 3; this.shieldFlash = 0.4;
       if (dmg <= 0) return;
     }
     let lost = false;
     if (c.top) {
-      const a = Math.min(c.top.hp, dmg); c.top.hp -= a; dmg -= a;
-      if (c.top.hp <= 0) { const [wx, wy] = this.cellWorld(c); Battle.explosion(wx, wy, 0.45); c.top = null; lost = true; }
+      const TP = PARTS[c.top.type];
+      let td = dmg;
+      if (blast && TP.blast) td *= TP.blast;
+      td = Math.max(td * 0.2, td - (TP.soak || 0));
+      const a = Math.min(c.top.hp, td); c.top.hp -= a;
+      dmg *= td > 0 ? 1 - a / td : 0;               // o que a peça não absorveu segue para o casco
+      if (c.top.hp <= 0) {
+        const [wx, wy] = this.cellWorld(c); Battle.explosion(wx, wy, 0.45);
+        this.cookOff(c);                             // munição pode explodir
+        c.top = null; lost = true;
+      }
     }
     if (dmg > 0) {
       const P = PARTS[c.base];
@@ -165,7 +185,8 @@ class Ship {
       c.hp -= dmg;
       if (c.hp <= 0) { this.removeCell(c); lost = true; }
     }
-    if (this === Battle.player) Battle.shake = Math.min(1, Battle.shake + 0.08);
+    if (!c.dead && src !== 'fire') this.tryIgnite(c, src, dmg, blast, owner);
+    if (this === Battle.player && src !== 'fire') Battle.shake = Math.min(1, Battle.shake + 0.08);
     if (lost) this.processStructure();
   }
 
@@ -175,6 +196,110 @@ class Ship {
     const [wx, wy] = this.cellWorld(c);
     if (c.top) Battle.explosion(wx, wy, 0.4);
     Battle.debris(wx, wy, c.base);
+    if (isHull(c.base)) this.addLeak(c);                                  // casco rompido: entra água
+    if (c.crew && this === Battle.player) Battle.crewNotice(this, c, false, true);
+  }
+
+  /* ------------------------------------------- alagamento, incêndio e tripulação */
+  addLeak(c) {
+    if (this.sinking) return;
+    let amt = 0.9;
+    for (const [dx, dy] of N4) { const n = this.cells.get((c.gx + dx) + ',' + (c.gy + dy)); if (n && PARTS[n.base].bulkhead) { amt *= 0.4; break; } }   // antepara segura a água
+    if (this.isSub && this.depth > 0.5) amt *= 1.5;                       // submarino afunda mais rápido com furo
+    this.leak = Math.min(14, this.leak + amt);
+  }
+  /** explosões subaquáticas abrem rombos no casco */
+  breach(amt) { if (!this.sinking && !this.remote) this.leak = Math.min(14, this.leak + amt); }
+
+  tryIgnite(c, src, dmg, blast, owner) {
+    if (this.sinking || c.dead || c.fire > 0 || PARTS[c.base].fireproof) return;
+    let ch = FIRE_CH[src] !== undefined ? FIRE_CH[src] : 0.06;
+    if (c.top) ch *= FLAMMABLE[PARTS[c.top.type].kind] || 1; else ch *= 0.35;       // casco nu pega fogo bem menos que peças com munição/combustível
+    if (this.depth > DEEP) ch *= 0.25;                                    // submerso: quase não pega fogo
+    if (Math.random() < ch * Math.min(1.6, 0.6 + dmg / 4)) { c.fire = 8; c.fireBy = owner; }
+  }
+
+  /** munição de uma peça destruída pode explodir e ferir as vizinhas */
+  cookOff(c) {
+    if (!c.top || !AMMO.has(PARTS[c.top.type].kind)) return;
+    if (Math.random() > (c.fire > 0 ? 0.7 : 0.3)) return;
+    const [wx, wy] = this.cellWorld(c);
+    Battle.explosion(wx, wy, 0.9);
+    for (const o of [...this.list]) {
+      if (o === c || o.dead) continue;
+      if (Math.hypot(o.gx - c.gx, o.gy - c.gy) <= 1.6) this.hitCell(o, 4, true, c.fireBy || null, 'cook');
+    }
+  }
+
+  /** atordoa a tripulação (choque elétrico); fuzileiros resistem */
+  stun(sec) {
+    if (this.remote) return;
+    const k = (this.fx.f || 0) > 0 ? 0.5 : 1;
+    for (const c of this.crewCells) c.stun = Math.max(c.stun, sec * k);
+  }
+
+  /** a cada quadro: tripulação, alagamento, bombas, reparos e incêndios */
+  updateDamageControl(dt) {
+    this.crewT -= dt;
+    if (this.crewT <= 0) { this.crewT = 0.4; this.updateCrew(); }
+    for (const c of this.crewCells) if (c.stun > 0) c.stun -= dt;
+    if (this.hooked > 0) this.hooked -= dt;
+    // alagamento
+    const patch = 0.04 + 0.5 * (this.fx.r || 0) + 0.12 * this.stats.repairs;
+    if (this.leak > 0) { this.leak = Math.max(0, this.leak - patch * dt); this.water += this.leak * dt; }
+    if (this.water > 0) this.water = Math.max(0, this.water - Math.min(3, this.stats.pumps) * 1.4 * dt);
+    this.wet = clamp(this.water / this.floodCap, 0, 1);
+    if (this.wet >= 1) { if (this === Battle.player) UI.banner('ALAGAMENTO!', 'O navio encheu de água'); this.sink(); return; }
+    if (this.isSub && this.wet > 0.7) this.diveCmd = false;               // submarino alagado não segura profundidade
+    // equipe de avarias conserta a peça mais ferida
+    this.healT -= dt;
+    if (this.healT <= 0) {
+      this.healT = 1;
+      if ((this.fx.r || 0) > 0) {
+        let worst = null, wr = 1;
+        for (const c of this.list) { if (c.dead || !isHull(c.base)) continue; const r = c.hp / c.maxHp; if (r < wr) { wr = r; worst = c; } }
+        if (worst) { worst.hp = Math.min(worst.maxHp, worst.hp + 0.9 * this.fx.r); }
+      }
+    }
+    this.updateFires(dt);
+  }
+
+  updateCrew() {
+    const fx = { g: 0, m: 0, r: 0, b: 0, t: 0, s: 0, f: 0 }, cnt = {};
+    for (const c of this.crewCells) {
+      if (c.dead) continue;
+      const on = c.hp / c.maxHp > 0.3 && !(c.stun > 0);                   // célula quebrada ou atordoada: perde a função
+      if (c.crewOn !== on) { c.crewOn = on; if (this === Battle.player) Battle.crewNotice(this, c, on, false); }
+      if (!on) continue;
+      cnt[c.crew] = (cnt[c.crew] || 0) + 1;
+      fx[c.crew] += cnt[c.crew] === 1 ? 1 : 0.5;
+    }
+    this.fx = fx;
+    const sm = 1 + 0.25 * Math.min(1.5, fx.s);
+    if (sm !== this.sensorMul) { this.sensorMul = sm; this.sonar = this.stats.sonarR * sm; this.pingR = this.stats.pingR * sm; if (!this.isSub) this.vision = this.stats.vision * this.visMul * sm; }
+  }
+
+  updateFires(dt) {
+    let burning = 0;
+    const ext = 1 + 2 * (this.fx.b || 0), tick = (this.fireT -= dt) <= 0;
+    if (tick) this.fireT = 1;
+    for (const c of this.list) {
+      if (c.dead || !(c.fire > 0)) continue;
+      burning++;
+      c.fire -= dt * ext + (this.depth > DEEP ? dt * 3 : 0);
+      if (tick && c.fire > 0) {
+        this.hitCell(c, 1.0, false, c.fireBy, 'fire');                    // queima
+        if (c.dead) continue;
+        for (const [dx, dy] of N4) {                                      // espalha
+          const n = this.cells.get((c.gx + dx) + ',' + (c.gy + dy));
+          if (!n || n.dead || n.fire > 0 || PARTS[n.base].fireproof) continue;
+          const ch = 0.12 * (n.top ? (FLAMMABLE[PARTS[n.top.type].kind] || 1) : 1) * (1 - 0.4 * Math.min(1, this.fx.b || 0));
+          if (Math.random() < ch) { n.fire = 7; n.fireBy = c.fireBy; }
+        }
+      }
+      if (c.fire <= 0) c.fire = 0;
+    }
+    this.burning = burning;
   }
 
   /** remove peças soltas, aletas sem apoio e afunda se a ponte cair */
@@ -233,12 +358,13 @@ class Ship {
     const fx = Math.sin(this.ang), fy = -Math.cos(this.ang), rx = Math.cos(this.ang), ry = Math.sin(this.ang);
     let vf = this.vx * fx + this.vy * fy, vs = this.vx * rx + this.vy * ry;
     const th = clamp(inp.throttle, -1, 1), thrust = th >= 0 ? th : th * 0.4;
-    const accel = st.accel + (st.accelSub - st.accel) * this.depth, mxs = st.maxSpeed + (st.maxSpeedSub - st.maxSpeed) * this.depth;
+    const pm = (1 + 0.15 * (this.fx.m || 0)) * (1 - 0.35 * this.wet) * (this.hooked > 0 ? 0.5 : 1);      // maquinistas, água e gancho
+    const accel = (st.accel + (st.accelSub - st.accel) * this.depth) * pm, mxs = (st.maxSpeed + (st.maxSpeedSub - st.maxSpeed) * this.depth) * pm;
     vf += (accel * thrust - 0.25 * vf) * dt;
     vs *= Math.exp(-st.grip * dt);
     this.vx = fx * vf + rx * vs; this.vy = fy * vf + ry * vs;
     const eff = Math.min(1, 0.3 + 0.7 * Math.abs(vf) / (0.45 * Math.max(mxs, 60)));
-    const target = clamp(inp.steer, -1, 1) * st.turn * eff;
+    const target = clamp(inp.steer, -1, 1) * st.turn * (1 + 0.25 * (this.fx.t || 0)) * eff;
     this.angVel += (target - this.angVel) * Math.min(1, dt * 4);
     this.ang += this.angVel * dt;
     this.x += this.vx * dt; this.y += this.vy * dt;
@@ -271,6 +397,7 @@ class Ship {
     }
 
     this.emitTrail(dt);
+    this.updateDamageControl(dt);
   }
 
   /** mergulho, bateria e visão submersa (só navios com Torre Submarina) */
@@ -283,10 +410,10 @@ class Ship {
     this.sub = this.depth > DEEP;
     if (this.sub) {
       if (!st.nuclear) this.battery = Math.max(0, this.battery - dt * (this.speed > st.maxSpeedSub * 0.7 ? 1.5 : 1));
-      this.vision = (st.periscopes ? 650 : 350) * this.visMul;              // radar não funciona submerso
+      this.vision = (st.periscopes ? 650 : 350) * this.visMul * this.sensorMul;              // radar não funciona submerso
     } else {
       this.battery = Math.min(this.maxBattery, this.battery + dt * 3);
-      this.vision = st.vision * this.visMul;
+      this.vision = st.vision * this.visMul * this.sensorMul;
     }
   }
 
@@ -308,6 +435,16 @@ class Ship {
       if (this.bow) {
         const [wx, wy] = this.cellWorld(this.bow), k = Math.min(1, this.speed / 150);
         for (const sg of [-1, 1]) Battle.addP({ t: 'foam', x: wx + fx * CS * 0.4, y: wy + fy * CS * 0.4, vx: rx * sg * 30 * k, vy: ry * sg * 30 * k, life: 0.8, s: 3, g: 9, layer: 0, a: 0.8 * k });
+      }
+    }
+    this.fireFxT = (this.fireFxT || 0) - dt;
+    if (this.fireFxT <= 0) {
+      this.fireFxT = 0.09;
+      for (const c of this.list) {
+        if (c.dead || !(c.fire > 0)) continue;
+        const [fx0, fy0] = this.cellWorld(c);
+        Battle.addP({ t: 'fire', x: fx0 + rand(-6, 6), y: fy0 + rand(-6, 6), vx: rand(-10, 10), vy: rand(-28, -8), life: rand(0.35, 0.7), s: rand(4, 8), g: -4 });
+        if (Math.random() < 0.5) Battle.addP({ t: 'smoke', x: fx0, y: fy0, vx: rand(-8, 8), vy: rand(-24, -10), life: rand(0.9, 1.6), s: 5, g: 9, a: 0.7 });
       }
     }
     this.smokeT -= dt;
@@ -358,6 +495,9 @@ class Ship {
     this.vision = m.v; this.sonar = m.sp; this.pingR = m.pr; this.sig = m.sg;
     this.reveal = !!m.rv; this.revealR = m.rv || 0; this.ping = !!m.pg;
     this.depth = m.dp || 0; this.sub = this.depth > DEEP; this.quiet = m.qt === undefined ? 1 : m.qt;
+    this.wet = m.wt || 0;
+    { const fire = new Set(m.fi || []); let i = 0; this.burning = 0; for (const k of this.order) { const c = this.cells.get(k); if (c) { c.fire = fire.has(i) ? 1 : 0; if (c.fire) this.burning++; } i++; } }
+    Battle.syncRemoteDrones(this, m.dr || []);
     if (m.tp) {
       let i = 0;
       for (const k of this.order) { const c = this.cells.get(k), a = m.tp[i++]; if (c && c.top && typeof a === 'number') c.top.ang = a; }
@@ -505,17 +645,46 @@ class Ship {
           const d = Math.hypot(sh.x - wx, sh.y - wy);
           if (d < bd) { bd = d; best = sh; }
         }
+        for (const dr of Battle.drones) {
+          if (dr.team === this.team || dr.dead || dr.remote) continue;
+          const dd = Math.hypot(dr.x - wx, dr.y - wy);
+          if (dd < bd) { bd = dd; best = dr; }
+        }
         if (best) {
           const want = Math.atan2(best.x - wx, -(best.y - wy));
           t.ang = turnToward(t.ang, want, 9 * dt);
           if (t.cd <= 0 && Math.abs(angDiff(want, t.ang)) < 0.2) {
             t.cd = P.reload; t.recoil = 1;
             Battle.addP({ t: 'tracer', x: wx, y: wy, x2: best.x, y2: best.y, life: 0.09 });
-            if (Math.random() < 0.8) { best.dead = true; Battle.explosion(best.x, best.y, 0.35); Battle.onShotGone(best); }
+            if (best.drone) { if (Math.random() < 0.7) Battle.killDrone(best, 'pd'); }
+            else if (Math.random() < 0.8) { best.dead = true; Battle.explosion(best.x, best.y, 0.35); Battle.onShotGone(best); }
           }
         } else t.ang = turnToward(t.ang, this.ang, 6 * dt);
         break;
       }
+      case 'hangar': {
+        if (t.drone && !t.drone.dead && Battle.drones.includes(t.drone)) break;          // drone no ar
+        t.drone = null;
+        t.dcd = (t.dcd === undefined ? 2 : t.dcd) - dt;
+        if (t.dcd > 0 || this.depth > 0.3) break;
+        if (P.drone === 'kamikaze') {
+          if (!(this.ai ? true : inp.fireMissile) || !Battle.pickGuidedTarget(this)) break;     // só sai quando mandado e há alvo detectado
+        } else if (P.drone === 'attack' && this.ai && !Battle.pickTarget(this)) break;
+        t.drone = Battle.launchDrone(this, c);
+        break;
+      }
+      case 'sprinkler':
+        t.acc += dt;
+        if (t.acc >= 0.7) {
+          t.acc = 0;
+          for (const o of this.list) {
+            if (o.dead || !(o.fire > 0) || Math.hypot(o.gx - c.gx, o.gy - c.gy) > P.range) continue;
+            o.fire = 0; const [fx0, fy0] = this.cellWorld(o);
+            Battle.addP({ t: 'ring', x: fx0, y: fy0, life: 0.5, s: 4, g: 40, layer: 0, cyan: true });
+            break;
+          }
+        }
+        break;
       case 'sonarA':
         t.acc += dt;
         if (t.acc >= P.every) {
@@ -581,9 +750,23 @@ class Ship {
     for (const c of this.list) {
       if (!c.top) continue;
       ctx.save(); ctx.translate((c.gx + 0.5 - ox) * CS, (c.gy + 0.5 - oy) * CS);
-      drawTop(ctx, c.top.type, CS, { ang: c.top.ang - this.ang, recoil: c.top.recoil, time });
+      drawTop(ctx, c.top.type, CS, { ang: c.top.ang - this.ang, recoil: c.top.recoil, time, out: !!(c.top.drone && !c.top.drone.dead) });
       if (c.flash > 0) { ctx.fillStyle = `rgba(255,255,255,${Math.min(0.6, c.flash * 5)})`; ctx.fillRect(-CS / 2, -CS / 2, CS, CS); }
       ctx.restore();
+    }
+    // alagamento e fogo
+    for (const c of this.list) {
+      const x = (c.gx - ox) * CS, y = (c.gy - oy) * CS;
+      if (this.wet > 0.03) { ctx.fillStyle = `rgba(30,110,190,${(0.38 * this.wet).toFixed(3)})`; ctx.fillRect(x, y, CS, CS); }
+      if (c.fire > 0) { ctx.fillStyle = `rgba(255,${(110 + 60 * Math.sin(time * 14 + c.gx * 3 + c.gy)) | 0},30,0.38)`; ctx.fillRect(x, y, CS, CS); }
+    }
+    // tripulação: só o dono e os aliados enxergam (para o inimigo ela é invisível)
+    if (this.team === Battle.player.team) {
+      for (const c of this.list) {
+        if (!c.crew) continue;
+        ctx.save(); ctx.translate((c.gx + 0.5 - ox) * CS, (c.gy + 0.5 - oy) * CS);
+        drawCrew(ctx, c.crew, CS, c.crewOn !== false); ctx.restore();
+      }
     }
     ctx.restore();
   }
@@ -618,12 +801,12 @@ const Battle = {
   ships: [], shots: [], parts: [], player: null, cam: { x: 0, y: 0 }, shake: 0, time: 0,
   keys: new Set(), mouse: { x: 0, y: 0, left: false, right: false },
   wave: 1, state: 'idle', running: false, last: 0, clearTimer: 0, overTimer: 0,
-  runCoins: 0, kills: 0, design: null, hud: {}, mode: 'campaign', noFog: false, friendlyFire: false, hostPaused: false, teamLast: {}, skirmish: null, localIds: new Set(), zoom: 1, shotSeq: 0, myDesign: null, cfg: null, deadNotice: false, contacts: new Map(), obs: [], aiAware: true, aiLast: { x: 0, y: 0 }, stealthT: 0,
+  runCoins: 0, kills: 0, design: null, hud: {}, mode: 'campaign', drones: [], noFog: false, friendlyFire: false, hostPaused: false, teamLast: {}, skirmish: null, localIds: new Set(), zoom: 1, shotSeq: 0, myDesign: null, cfg: null, deadNotice: false, contacts: new Map(), obs: [], aiAware: true, aiLast: { x: 0, y: 0 }, stealthT: 0,
 
   init() {
     this.canvas = document.getElementById('game'); this.ctx = this.canvas.getContext('2d');
     this.mini = document.getElementById('minimap'); this.mctx = this.mini.getContext('2d');
-    for (const id of ['wave', 'enemies', 'coins', 'hp-fill', 'hp-text', 'speed', 'cd-cannon', 'cd-torp', 'cd-mortar', 'row-cannon', 'row-torp', 'row-mortar', 'row-shield', 'shield-fill', 'row-stealth', 'stealth-fill', 'vision', 'row-depth', 'depth-fill', 'row-batt', 'batt-fill', 'row-mine', 'cd-mine'])
+    for (const id of ['wave', 'enemies', 'coins', 'hp-fill', 'hp-text', 'speed', 'cd-cannon', 'cd-torp', 'cd-mortar', 'row-cannon', 'row-torp', 'row-mortar', 'row-shield', 'shield-fill', 'row-stealth', 'stealth-fill', 'vision', 'row-depth', 'depth-fill', 'row-batt', 'batt-fill', 'row-mine', 'cd-mine', 'row-flood', 'flood-fill', 'row-fire', 'fire-text', 'crew'])
       this.hud[id] = document.getElementById('hud-' + id);
     this.fogCv = document.createElement('canvas'); this.fogCtx = this.fogCv.getContext('2d');
     window.addEventListener('resize', () => this.resize());
@@ -681,7 +864,7 @@ const Battle = {
     this.clearTimer = 0; this.overTimer = 0;
     this.ships = []; this.shots = []; this.parts = []; this.time = 0; this.shake = 0;
     this.player = new Ship(design, 'p', 0, 0, 0); this.player.id = 'me';
-    this.ships.push(this.player); this.stealthT = 0; this.teamLast = {}; this.skirmish = null; this.localIds = new Set();
+    this.ships.push(this.player); this.stealthT = 0; this.teamLast = {}; this.skirmish = null; this.localIds = new Set(); this.drones = [];
     this.zoom = this.loadZoom();
     this.cam.x = 0; this.cam.y = 0;
     this.keys.clear(); this.mouse.left = this.mouse.right = false;
@@ -703,7 +886,7 @@ const Battle = {
     this.wave = 0; this.runCoins = 0; this.kills = 0;
     this.ships = []; this.shots = []; this.parts = []; this.time = 0; this.shake = 0;
     const sp = cfg.spawn;
-    this.skirmish = null; this.teamLast = {}; this.localIds = new Set([cfg.me.id]); this.zoom = this.loadZoom();
+    this.skirmish = null; this.teamLast = {}; this.localIds = new Set([cfg.me.id]); this.zoom = this.loadZoom(); this.drones = [];
     this.player = new Ship(cfg.me.design, cfg.me.team, sp.x, sp.y, sp.a); this.player.id = cfg.me.id; this.player.label = cfg.me.name;
     this.ships.push(this.player);
     for (const p of cfg.players) {
@@ -776,7 +959,7 @@ const Battle = {
       c.hp += (c.maxHp - c.hp) * 0.35;
       if (c.top) c.top.hp += (c.top.maxHp - c.top.hp) * 0.35;
     }
-    this.shots = []; this.ships = [this.player]; this.spawnWave(); this.stealthT = 0;
+    this.shots = []; this.drones = []; this.ships = [this.player]; this.spawnWave(); this.stealthT = 0;
     this.state = 'playing'; this.clearTimer = 0;
     UI.hideOverlay();
   },
@@ -874,6 +1057,14 @@ const Battle = {
     }
     this.shots.push(s);
   },
+  /** aviso ao dono quando um grupo de tripulação perde (ou recupera) a função */
+  crewNotice(ship, c, on, destroyed) {
+    const info = CREW[c.crew];
+    if (!info) return;
+    const [wx, wy] = ship.cellWorld(c);
+    this.addP({ t: 'text', txt: on ? '✔ ' + info.name : '⚠ ' + info.name + (destroyed ? ' perdidos' : ' fora de ação'), x: wx, y: wy - 18, vy: -26, life: 1.8, s: 14, col: on ? '#9ff0b0' : '#ffb0a0' });
+  },
+
   /** ganchos do modo online (sobrescritos por Online) */
   onShotGone(p) { if (this.mode === 'online' && p.id) Online.send({ t: 'hit', id: p.id, x: p.x, y: p.y }); },
   onPing(ship) { if (this.mode === 'online' && !ship.remote) Online.send(ship === this.player ? { t: 'ping' } : { t: 'ping', as: ship.id }); },
@@ -882,6 +1073,7 @@ const Battle = {
   /** o time `team` detecta o alvo (visão normal, sonar, revelação)? */
   teamSees(team, tg) {
     for (const o of this.ships) if (o.team === team && !o.sinking && !o.dead && detects(o, tg)) return true;
+    for (const d of this.drones) if (d.team === team && !d.dead && detects(d, tg)) return true;          // drones enxergam por conta própria
     return false;
   },
   /** a arma/torre de `ship` pode mirar em `s`? (precisa estar detectado) */
@@ -911,6 +1103,7 @@ const Battle = {
     const me = this.player;
     this.obs = this.ships.filter(o => o.team === me.team && !o.sinking && !o.dead);
     if (!this.obs.length) this.obs = [me];                          // jogador afundando: mantém a cena visível
+    for (const d of this.drones) if (d.team === me.team && !d.dead && d.vision) this.obs.push(d);   // drones aliados ampliam a visão
     const contacts = new Map();
     for (const s of this.ships) {
       if (s.team === me.team) { contacts.set(s, 'full'); continue; }
@@ -1059,7 +1252,7 @@ const Battle = {
     let ax = tg.x, ay = tg.y;
     if (a.aimCell && !a.aimCell.dead) [ax, ay] = tg.cellWorld(a.aimCell);
     let heading;
-    if (s.rammer) heading = dist < 130 ? toT + a.orbit * 1.2 : toT;       // brulote: cola no alvo
+    if (s.rammer) heading = dist < 130 && !s.stats.meleeKinds.ram ? toT + a.orbit * 1.2 : toT;       // brulote/abordador: cola no alvo (aríete investe sempre)
     else if (s.hasTorp && dist < 750) heading = dist < 160 ? toT + a.orbit * 1.4 : toT;
     else if (dist > a.pref + 80) heading = toT;
     else if (dist < a.pref - 80) heading = toT + a.orbit * 2.3;
@@ -1099,11 +1292,15 @@ const Battle = {
     for (const s of this.ships) if (s.ai && !s.sinking && !s.dead) this.aiThink(s, dt);
     for (const s of this.ships) { if (s.remote) s.updateRemote(dt); else s.update(dt); }
 
+    this.meleeStep(dt);
+    this.updateDrones(dt);
+
     /* colisão entre navios (círculos) */
     for (let i = 0; i < this.ships.length; i++) for (let j = i + 1; j < this.ships.length; j++) {
       const a = this.ships[i], b = this.ships[j];
       if (a.sinking || b.sinking || (a.remote && b.remote) || (a.remote && a.seenT <= 0) || (b.remote && b.seenT <= 0)) continue;
-      const r = (a.radius + b.radius) * 0.6, dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy);
+      const melee = (a.meleeCells && a.meleeCells.length) || (b.meleeCells && b.meleeCells.length);
+      const r = (a.radius + b.radius) * (melee ? 0.42 : 0.6), dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy);   // com armas de contato os cascos podem se encostar
       if (d < r && d > 0.01) {
         const nx = dx / d, ny = dy / d, push = (r - d) / 2;
         const wa = a.remote ? 0 : (b.remote ? 2 : 1), wb = b.remote ? 0 : (a.remote ? 2 : 1);   // o remoto não é empurrado: o dono resolve
@@ -1155,6 +1352,15 @@ const Battle = {
         continue;
       }
       if (p.kind === 'missile' || (p.kind === 'torp' && p.turn)) this.steerMissile(p, dt);
+      if (p.kind === 'bullet' || p.kind === 'heavy') {                    // metralhadoras derrubam drones
+        for (const dr of this.drones) {
+          if (dr.dead || dr.team === p.team || Math.hypot(dr.x - p.x, dr.y - p.y) > 12) continue;
+          this.impact(p.x, p.y); p.dead = true;
+          if (!dr.remote) { dr.hp -= p.dmg * 2.2; if (dr.hp <= 0) this.killDrone(dr, 'shot'); }
+          break;
+        }
+        if (p.dead) continue;
+      }
       const steps = Math.max(1, Math.ceil(Math.hypot(p.vx, p.vy) * dt / 8));
       for (let i = 0; i < steps && !p.dead; i++) {
         p.x += p.vx * dt / steps; p.y += p.vy * dt / steps;
@@ -1227,20 +1433,171 @@ const Battle = {
 
   updateParticlesOnly(dt) { this.time += dt; for (const s of this.ships) if (s.sinking) s.update(dt); this.updateParticles(dt); },
 
+  /* ------------------------------------------------------------------ drones */
+  launchDrone(ship, c) {
+    const P = PARTS[c.top.type], [wx, wy] = ship.cellWorld(c);
+    const d = { drone: true, owner: ship, ownerId: ship.id, team: ship.team, kind: P.drone, P, hangar: c.top, x: wx, y: wy, ang: ship.ang, hp: P.dhp, fuel: P.fuel,
+      bombT: 1.2, home: false, dead: false, vision: P.vision, sonar: 0, ping: false, pingR: 0, sig: 1, reveal: false, revealR: 0, sub: false, quiet: 1, remote: false, orbit: rand(0, TAU) };
+    this.drones.push(d);
+    this.addP({ t: 'ring', x: wx, y: wy, life: 0.4, s: 4, g: 60, layer: 0 });
+    return d;
+  },
+  killDrone(d, why) {
+    if (d.dead) return;
+    d.dead = true;
+    if (d.hangar) { d.hangar.drone = null; d.hangar.dcd = why === 'land' ? 4 : d.P.relaunch; }
+    if (why !== 'land') { this.explosion(d.x, d.y, why === 'boom' ? 0.8 : 0.5); }
+  },
+  /** inimigo detectado mais próximo (do cursor, para o jogador) dentro do alcance do drone */
+  droneTarget(d) {
+    const o = d.owner, ref = o.ai ? [o.x, o.y] : [o.input.aimX, o.input.aimY], range = d.kind === 'kamikaze' ? 1100 : 800;
+    let best = null, bd = 1e9;
+    for (const s of this.ships) {
+      if (s.team === d.team || s.sinking || s.dead || !this.canTarget(o, s)) continue;
+      if (Math.hypot(s.x - o.x, s.y - o.y) > range) continue;
+      const dist = Math.hypot(s.x - ref[0], s.y - ref[1]);
+      if (dist < bd) { bd = dist; best = s; }
+    }
+    return best;
+  },
+  updateDrones(dt) {
+    for (const d of this.drones) {
+      if (d.dead || d.remote) continue;
+      const o = d.owner;
+      if (!o || o.sinking || o.dead || o.depth > 0.3 || !this.ships.includes(o)) { this.killDrone(d, 'crash'); continue; }
+      d.fuel -= dt;
+      if (d.fuel <= 0 && d.kind === 'kamikaze') { this.killDrone(d, 'boom'); continue; }       // sem combustível: cai
+      let gx, gy, tg = null;
+      if (d.fuel < 6 && d.kind !== 'kamikaze') d.home = true;
+      if (d.home) { gx = o.x; gy = o.y; if (Math.hypot(o.x - d.x, o.y - d.y) < 70) { this.killDrone(d, 'land'); continue; } }
+      else if (d.kind === 'recon') {
+        const ref = o.ai ? [o.x + Math.sin(o.ang) * 420, o.y - Math.cos(o.ang) * 420] : [o.input.aimX, o.input.aimY];
+        const dx = ref[0] - o.x, dy = ref[1] - o.y, dl = Math.hypot(dx, dy) || 1, k = Math.min(1, 800 / dl);       // coleira de 800 do navio
+        gx = o.x + dx * k; gy = o.y + dy * k;
+      } else {
+        tg = this.droneTarget(d);
+        if (tg) { gx = tg.x; gy = tg.y; } else { d.orbit += dt * 0.8; gx = o.x + Math.cos(d.orbit) * 140; gy = o.y + Math.sin(d.orbit) * 140; }
+      }
+      const dist = Math.hypot(gx - d.x, gy - d.y);
+      let want = Math.atan2(gx - d.x, -(gy - d.y));
+      if (!d.home && dist < 80 && d.kind !== 'kamikaze') want += Math.PI / 2 * (dist < 50 ? 1 : 0.5);                // circula em volta do ponto
+      d.ang = turnToward(d.ang, want, 3.4 * dt);
+      const sp = d.P.speed;
+      d.vx = Math.sin(d.ang) * sp; d.vy = -Math.cos(d.ang) * sp;
+      d.x = clamp(d.x + d.vx * dt, -HALF, HALF); d.y = clamp(d.y + d.vy * dt, -HALF, HALF);
+      if (tg && d.kind === 'attack') {                                                  // bombardeio
+        d.bombT -= dt;
+        if (d.bombT <= 0 && Math.hypot(tg.x - d.x, tg.y - d.y) < tg.radius * 0.7) {
+          d.bombT = d.P.bomb.every;
+          this.shoot({ kind: 'mortar', x: d.x, y: d.y, x0: d.x, y0: d.y, tx: d.x + rand(-6, 6), ty: d.y + rand(-6, 6), T: 0.45, life: 0.45, dmg: d.P.bomb.dmg, splash: d.P.bomb.splash, team: d.team, owner: d.ownerId });
+        }
+      }
+      if (tg && d.kind === 'kamikaze' && (tg.cellAt(d.x, d.y) || Math.hypot(tg.x - d.x, tg.y - d.y) < 14)) {
+        this.shoot({ kind: 'mortar', x: d.x, y: d.y, x0: d.x, y0: d.y, tx: d.x, ty: d.y, T: 0.05, life: 0.05, dmg: d.P.boom.dmg, splash: d.P.boom.splash, team: d.team, owner: d.ownerId });
+        this.killDrone(d, 'boom');
+      }
+    }
+    this.drones = this.drones.filter(d => !d.dead);
+  },
+  /** retrato de drones de um navio remoto: [x, y, ang, tipo, vida, visão] */
+  syncRemoteDrones(ship, arr) {
+    this.drones = this.drones.filter(d => !(d.remote && d.ownerId === ship.id));
+    for (const a of arr) this.drones.push({ drone: true, remote: true, ownerId: ship.id, owner: ship, team: ship.team, kind: a[3], x: a[0], y: a[1], ang: a[2], hp: a[4],
+      dead: false, vision: a[5] || 0, sonar: 0, ping: false, pingR: 0, sig: 1, reveal: false, revealR: 0, sub: false, quiet: 1 });
+  },
+  drawDrone(d) {
+    const ctx = this.ctx, col = d.kind === 'recon' ? '#7fd4ff' : d.kind === 'attack' ? '#ff6a5c' : '#ffb347';
+    const body = k => {
+      poly(ctx, [[0, -11 * k], [3 * k, -3 * k], [3 * k, 8 * k], [0, 11 * k], [-3 * k, 8 * k], [-3 * k, -3 * k]]); ctx.fill();
+      ctx.fillRect(-12 * k, -2 * k, 24 * k, 4 * k); ctx.fillRect(-5 * k, 7 * k, 10 * k, 2.5 * k);
+    };
+    ctx.save(); ctx.translate(d.x + 10, d.y + 14); ctx.rotate(d.ang); ctx.fillStyle = 'rgba(0,0,0,.22)'; body(0.9); ctx.restore();
+    ctx.save(); ctx.translate(d.x, d.y); ctx.rotate(d.ang);
+    ctx.fillStyle = '#e8edf2'; body(1);
+    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(0, -6, 3, 0, TAU); ctx.fill();
+    if (d.kind === 'recon') { ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(0, 2, 3, 0, TAU); ctx.stroke(); }
+    if (d.kind === 'attack') { ctx.fillStyle = '#3a3f46'; ctx.beginPath(); ctx.arc(-7, 2, 2.4, 0, TAU); ctx.arc(7, 2, 2.4, 0, TAU); ctx.fill(); }
+    ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 1.5; ctx.beginPath(); const pa = this.time * 40; ctx.moveTo(Math.cos(pa) * 6, -11 + Math.sin(pa) * 1.5); ctx.lineTo(-Math.cos(pa) * 6, -11 - Math.sin(pa) * 1.5); ctx.stroke();
+    ctx.restore();
+  },
+
+  /** armas de corpo a corpo: espinhos, serras, aríete, ganchos e choque (cada cliente aplica o dano só no seu navio) */
+  meleeStep(dt) {
+    for (const a of this.ships) {
+      if (a.sinking || a.dead || !a.meleeCells || !a.meleeCells.length) continue;
+      if (a.remote && a.seenT <= 0) continue;
+      for (const m of a.meleeCells) if (m.top && m.top.mcd > 0) m.top.mcd -= dt;
+      for (const b of this.ships) {
+        if (b === a || b.sinking || b.dead || this.sameTeam(b, a.team, a.id)) continue;
+        if ((b.remote && b.seenT <= 0) || (a.remote && b.remote)) continue;
+        if (Math.abs(a.depth - b.depth) > 0.5) continue;
+        if (Math.hypot(a.x - b.x, a.y - b.y) > a.radius + b.radius + 12) continue;
+        for (const m of a.meleeCells) {
+          const t = m.top;
+          if (!t || m.dead || t.mcd > 0) continue;
+          const P = PARTS[t.type], [wx, wy] = a.cellWorld(m);
+          let ux, uy;
+          if (P.mkind === 'ram') { ux = Math.sin(a.ang); uy = -Math.cos(a.ang); }                                // aríete ataca para a proa
+          else {                                                                                                  // as demais atacam para fora do casco
+            const lx = m.gx + 0.5 - a.ox, ly = m.gy + 0.5 - a.oy, ln = Math.hypot(lx, ly) || 1;
+            ux = (lx * a.ca - ly * a.sa) / ln; uy = (lx * a.sa + ly * a.ca) / ln;
+          }
+          const c = b.cellAt(wx + ux * CS * 0.62, wy + uy * CS * 0.62) || b.cellAt(wx, wy);
+          if (c) this.meleeHit(a, b, m, c, P, ux, uy, wx, wy);
+        }
+      }
+    }
+  },
+
+  meleeHit(a, b, m, c, P, ux, uy, wx, wy) {
+    const t = m.top, mar = 1 + 0.4 * (a.fx.f || 0);
+    t.mcd = P.tick;
+    const px = wx + ux * CS * 0.6, py = wy + uy * CS * 0.6;
+    switch (P.mkind) {
+      case 'spike': b.hitCell(c, P.dmg * mar, false, a.id, 'melee'); this.impact(px, py); break;
+      case 'saw':
+        b.hitCell(c, P.dmg * mar, false, a.id, 'melee');
+        for (let i = 0; i < 3; i++) this.addP({ t: 'spark', x: px, y: py, vx: rand(-180, 180), vy: rand(-180, 180), life: rand(0.12, 0.3), drag: 3 });
+        SFX.play('mg', px, py);
+        break;
+      case 'ram': {
+        const rel = (a.vx - b.vx) * ux + (a.vy - b.vy) * uy;                                                      // velocidade de aproximação
+        if (rel < 35) { t.mcd = 0.2; return; }
+        const dmg = clamp(rel * P.dmg, 3, 20) * mar;
+        b.hitCell(c, dmg, false, a.id, 'melee');
+        a.hitCell(m, dmg * 0.15, false, b.id, 'melee');                                                           // o esporão também sofre
+        if (!b.remote) { const k = rel * 0.25 * clamp(a.stats.mass / Math.max(1, b.stats.mass), 0.3, 2); b.vx += ux * k; b.vy += uy * k; }
+        if (!a.remote) { a.vx -= ux * rel * 0.3; a.vy -= uy * rel * 0.3; }
+        this.explosion(px, py, 0.7); this.shake = Math.min(1, this.shake + 0.2);
+        break;
+      }
+      case 'hook':
+        b.hitCell(c, P.dmg * mar, false, a.id, 'melee');
+        if (!b.remote) { b.hooked = 4; b.vx -= ux * 14; b.vy -= uy * 14; }
+        this.impact(px, py);
+        break;
+      case 'shock':
+        b.hitCell(c, P.dmg * mar, false, a.id, 'melee');
+        if (!b.remote) { b.stun(4); b.shield = Math.max(0, b.shield - 6); }
+        for (let i = 0; i < 4; i++) this.addP({ t: 'spark', x: px + rand(-8, 8), y: py + rand(-8, 8), vx: rand(-120, 120), vy: rand(-120, 120), life: 0.18, drag: 2 });
+        break;
+    }
+  },
+
   /** efeito de uma bala em uma célula; retorna true se o projétil foi consumido */
   impactShot(p, s, c) {
     if (p.kind === 'torp' || p.kind === 'missile') { this.blast(p.x, p.y, p.splash, p.dmg, p.team, p.owner, p.kind); return true; }
     if (p.kind === 'rail') {
       const hs = p.hit || (p.hit = new Set());
       if (hs.has(c)) return false;
-      hs.add(c); this.impact(p.x, p.y); s.hitCell(c, p.dmg, false, p.owner); p.dmg *= 0.65;
+      hs.add(c); this.impact(p.x, p.y); s.hitCell(c, p.dmg, false, p.owner, p.kind); p.dmg *= 0.65;
       return --p.pierce < 0;
     }
     if (p.kind === 'flame') {
       this.addP({ t: 'fire', x: p.x, y: p.y, vx: rand(-20, 20), vy: rand(-20, 20), life: 0.35, s: 6, g: 10 });
-      s.hitCell(c, p.dmg, false, p.owner); return true;
+      s.hitCell(c, p.dmg, false, p.owner, 'flame'); return true;
     }
-    this.impact(p.x, p.y); s.hitCell(c, p.dmg, false, p.owner); return true;
+    this.impact(p.x, p.y); s.hitCell(c, p.dmg, false, p.owner, p.kind); return true;
   },
 
   /** explosão em área: dano decai com a distância (casco reativo reduz pela metade) */
@@ -1259,7 +1616,8 @@ const Battle = {
         const [wx, wy] = s.cellWorld(c), d = Math.hypot(wx - x, wy - y);
         if (d < reach) hits.push([c, d]);
       }
-      for (const [c, d] of hits) s.hitCell(c, dm * (1 - 0.6 * d / reach), true, owner);
+      for (const [c, d] of hits) s.hitCell(c, dm * (1 - 0.6 * d / reach), true, owner, kind);
+      if (under && hits.length) s.breach(kind === 'torp' ? 1.2 : kind === 'mine' ? 1.0 : 0.7);        // torpedo/mina/carga: rombo no casco
     }
   },
 
@@ -1352,6 +1710,17 @@ const Battle = {
       h['batt-fill'].style.width = (p.stats.nuclear ? 100 : bt * 100).toFixed(0) + '%';
       h['batt-fill'].style.background = p.stats.nuclear ? '#8dffb0' : bt > 0.4 ? '#7bd86a' : bt > 0.15 ? '#f5b942' : '#ff5d5d';
     }
+    h['row-flood'].style.display = p.wet > 0.01 || p.leak > 0 ? '' : 'none';
+    if (p.wet > 0.01 || p.leak > 0) {
+      h['flood-fill'].style.width = (p.wet * 100).toFixed(0) + '%';
+      h['flood-fill'].style.background = p.wet > 0.7 ? '#ff5d5d' : p.wet > 0.4 ? '#f5b942' : '#4aa8ff';
+    }
+    h['row-fire'].style.display = p.burning > 0 ? '' : 'none';
+    if (p.burning > 0) h['fire-text'].textContent = '🔥 ' + p.burning + ' peça(s) em chamas';
+    const crew = {};
+    for (const c of p.crewCells) { const k = c.crew; crew[k] = crew[k] || [0, 0]; crew[k][1]++; if (!c.dead && c.crewOn !== false) crew[k][0]++; }
+    const chips = Object.keys(crew).map(k => `<span class="crew-chip ${crew[k][0] ? '' : 'off'}" title="${CREW[k].name}">${CREW[k].icon}${crew[k][0]}/${crew[k][1]}</span>`).join('');
+    if (chips !== this.crewHtml) { this.crewHtml = chips; h.crew.innerHTML = chips; }
     h['row-mine'].style.display = w.mine === null ? 'none' : '';
     if (w.mine !== null) h['cd-mine'].style.width = (w.mine * 100).toFixed(0) + '%';
     const tb = document.getElementById('tbtn-dive'), tm = document.getElementById('tbtn-aux');
@@ -1389,6 +1758,7 @@ const Battle = {
     for (const [sh, mode] of this.contacts) if (mode === 'full' && sh !== this.player) sh.draw(ctx, this.time);
     this.player.draw(ctx, this.time);
     for (const [sh, mode] of this.contacts) if (mode === 'full') sh.drawShield(ctx);
+    for (const d of this.drones) if (!d.dead && (d.team === this.player.team || (this.inVision(d.x, d.y) && (!d.remote || (d.owner && d.owner.seenT > 0))))) this.drawDrone(d);
     for (const p of this.shots) if (p.kind !== 'torp' && shown(p)) this.drawShot(p);
     this.drawParticles(1);
 

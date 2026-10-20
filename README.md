@@ -1,4 +1,4 @@
-# ⚓ Batalha Naval — v1.7
+# ⚓ Batalha Naval — v1.8
 
 Monte seu navio **peça por peça** numa grade (casco, armas, motores, aletas, sensores…) e lute contra ondas de inimigos
 ou contra outros jogadores **online**. Funciona no computador e no **celular** (instalável como app).
@@ -20,6 +20,13 @@ ou contra outros jogadores **online**. Funciona no computador e no **celular** (
 - **Dano por peça**: cada quadrado tem vida; tiros destroem armas antes do casco, e partes desconectadas da ponte se soltam.
 - **Campanha** em ondas com 20 modelos de inimigos (incluindo um chefe) e moedas que aumentam o orçamento.
 - **Submarinos (v1.6):** troque a ponte pela **Torre Submarina**. Mergulhe (`V`): você some da vista, só leva torpedos/minas/cargas e só atira torpedos e minas; a bateria acaba e você emerge. Peças: periscópio, lastro, bateria, minas, cargas de profundidade, motor elétrico silencioso, reator nuclear.
+- **Combate de perto, danos indiretos, drones e tripulação (v1.8):**
+  - **Corpo a corpo:** Espinhos, Serra Giratória, Aríete, Gancho de Abordagem e Bobina de Choque causam dano ao encostar no inimigo (o aríete usa a proa).
+  - **Mais cascos e blindagens:** Cerâmico, Titânio, Compartimentado, Flutuante, Corta-fogo e as Placas de convés (Aço e Reativa), que absorvem dano antes do casco.
+  - **Alagamento:** cascos rompidos deixam entrar água; acima da capacidade o navio afunda (e fica mais lento). Bomba de Esgoto e Equipe de Avarias ajudam; submarinos vazam mais mergulhados.
+  - **Fogo:** peças atingidas podem pegar fogo, que queima e se espalha; Sistema Anti-Incêndio e Bombeiros apagam. Munição em chamas pode explodir.
+  - **Drones:** Hangares de Reconhecimento (ampliam a visão, seguem a mira), Ataque (bombardeiam inimigos detectados) e Suicida (`Espaço`/botão direito). Metralhadoras e defesa pontual os derrubam; hangar vazio demora para relançar.
+  - **Tripulação:** círculos invisíveis para o inimigo (Artilheiros, Maquinistas, Equipe de Avarias, Bombeiros, Timoneiros, Operadores de Sensores, Fuzileiros). Se a peça sob o grupo for danificada ou destruída, o navio perde aquela função.
 - **Bots configuráveis (v1.6):** dificuldade, quantidade, modelos permitidos, *escaramuça* offline e **bots nas salas online** (o anfitrião adiciona; rodam no navegador dele).
 - **Zoom (v1.6):** ⚙ Opções (35%–160%) ou roda do mouse / `−` `+` na batalha.
 - **Visão e furtividade (v1.5):**

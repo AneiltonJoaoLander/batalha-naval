@@ -103,7 +103,11 @@ const botsOf = (r, q) => { const out = []; for (const b of r.players.values()) i
 function canSee(r, q, p, now) {
   if (!r.settings.fog || q.team === p.team || !q.alive) return true;                 // aliados e espectadores veem tudo
   const t = dstate(p, now);
-  for (const o of r.players.values()) if (o.alive && o.team === q.team && G.detects(dstate(o, now), t)) return true;
+  for (const o of r.players.values()) {
+    if (!o.alive || o.team !== q.team) continue;
+    if (G.detects(dstate(o, now), t)) return true;
+    for (const d of o.drones || []) if (G.detects({ x: d[0], y: d[1], vision: d[5], sonar: 0, pingR: 0, ping: false, sig: 1, reveal: false, revealR: 0, sub: false, quiet: 1 }, t)) return true;   // drones aliados enxergam
+  }
   return false;
 }
 
@@ -173,8 +177,11 @@ function startMatch(r) {
     p.revealUntil = p.pingUntil = 0; p.revealR = 0;
     const sp = spawnPoint(r, p); p.x = sp.x; p.y = sp.y; spawns[p.id] = sp;
   }
-  const list = [...r.players.values()].map(p => ({ id: p.id, name: p.name, team: p.team, design: p.design, bot: !!p.isBot, owner: p.owner || '', diff: p.diff || '' }));
-  for (const p of r.players.values()) tell(p, { t: 'start', you: p.id, settings: r.settings, players: list, spawns, endsAt: r.endsAt });
+  const owns = (a, b) => a.id === b.id || a.team === b.team || a.id === b.owner || b.id === a.owner;      // a tripulação só é visível para o próprio time
+  for (const p of r.players.values()) {
+    const list = [...r.players.values()].map(o => ({ id: o.id, name: o.name, team: o.team, design: owns(p, o) ? o.design : G.stripCrew(o.design), bot: !!o.isBot, owner: o.owner || '', diff: o.diff || '' }));
+    tell(p, { t: 'start', you: p.id, settings: r.settings, players: list, spawns, endsAt: r.endsAt });
+  }
 }
 
 function endMatch(r, reason) {
@@ -369,6 +376,16 @@ function onMessage(p, raw) {
         fl: num(m.fl, 0, 1), sh: num(m.sh, 0, 500), v: p.vision, sp: p.sonar, pr: p.pingR, sg: p.sig, dp: p.dp, qt: p.quiet };
       if (Array.isArray(m.c) && m.c.length <= 700) out.c = m.c;
       if (Array.isArray(m.tp) && m.tp.length <= 350) out.tp = m.tp;
+      out.wt = num(m.wt, 0, 1, 0);
+      if (Array.isArray(m.fi) && m.fi.length <= 120) out.fi = m.fi.filter(n => Number.isInteger(n) && n >= 0 && n < 350);
+      p.drones = [];
+      if (Array.isArray(m.dr) && p.stats.hangars) {
+        for (const d of m.dr.slice(0, Math.min(8, p.stats.hangars))) {
+          if (!Array.isArray(d) || !['recon', 'attack', 'kamikaze'].includes(d[3])) continue;
+          p.drones.push([num(d[0], -H, H), num(d[1], -H, H), num(d[2], -50, 50), d[3], num(d[4], 0, 20), Math.min(num(d[5], 0, 450), 450)]);
+        }
+      }
+      if (p.drones.length) out.dr = p.drones;
       const nowT = Date.now();
       if (nowT < p.revealUntil) out.rv = p.revealR;
       if (nowT < p.pingUntil) out.pg = 1;

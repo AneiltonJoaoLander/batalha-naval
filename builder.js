@@ -27,7 +27,8 @@ const Builder = (() => {
   function problem(d, t, x, y) {
     if (!inRange(x, y)) return 'Fora da grade';
     const h = d.hull[y][x];
-    if (t.eraser) return h || d.top[y][x] ? null : 'Nada para apagar';
+    if (t.eraser) return h || d.top[y][x] || d.crew[y][x] ? null : 'Nada para apagar';
+    if (t.layer === 'crew') return isHull(h) ? null : 'A tripulação precisa ficar sobre uma peça de casco';
     if (t.layer === 'hull') return null;
     if (t.layer === 'top') {
       if (!isHull(h)) return 'Precisa ficar sobre uma peça de casco';
@@ -42,7 +43,7 @@ const Builder = (() => {
   }
 
   function place(d, t, x, y) {
-    if (t.eraser) { if (d.top[y][x]) d.top[y][x] = ''; else d.hull[y][x] = ''; return; }
+    if (t.eraser) { if (d.top[y][x]) d.top[y][x] = ''; else if (d.crew[y][x]) d.crew[y][x] = ''; else d.hull[y][x] = ''; return; }
     if (t.layer === 'hull') {
       if (isBridge(t.part)) {
         for (let j = 0; j < GRID_H; j++) for (let i = 0; i < GRID_W; i++) if (isBridge(d.hull[j][i])) d.hull[j][i] = '#';
@@ -50,6 +51,7 @@ const Builder = (() => {
       }
       d.hull[y][x] = t.part;
     } else if (t.layer === 'top') d.top[y][x] = t.part;
+    else if (t.layer === 'crew') d.crew[y][x] = t.crew;
     else d.hull[y][x] = finFor(d, t.part, x, y);
   }
 
@@ -58,6 +60,7 @@ const Builder = (() => {
     for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) {
       const h = d.hull[y][x];
       if (d.top[y][x] && (!isHull(h) || isBridge(h))) d.top[y][x] = '';
+      if (d.crew[y][x] && !isHull(h)) d.crew[y][x] = '';
       if (h === '<' && !hullAt(d, x + 1, y)) d.hull[y][x] = '';
       if (h === '>' && !hullAt(d, x - 1, y)) d.hull[y][x] = '';
       if (h === 'v' && !hullAt(d, x, y - 1)) d.hull[y][x] = '';
@@ -66,7 +69,7 @@ const Builder = (() => {
 
   function apply(x, y, button) {
     if (button === 2) {                       // botão direito: apaga tudo
-      const each = (xx, yy) => { if (inRange(xx, yy)) { design.hull[yy][xx] = ''; design.top[yy][xx] = ''; } };
+      const each = (xx, yy) => { if (inRange(xx, yy)) { design.hull[yy][xx] = ''; design.top[yy][xx] = ''; design.crew[yy][xx] = ''; } };
       each(x, y); if (symmetry) each(GRID_W - 1 - x, y);
     } else {
       const t = toolDef(tool);
@@ -158,7 +161,13 @@ const Builder = (() => {
     for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) {
       const c = design.top[y][x]; if (!c) continue;
       const [cx, cy] = cellXY(x, y);
-      ctx.save(); ctx.translate(cx, cy); drawTop(ctx, c, CELL); ctx.restore();
+      ctx.save(); ctx.translate(cx, cy); drawTop(ctx, c, CELL, { time }); ctx.restore();
+    }
+    // tripulação (círculos pequenos; escondidos dos inimigos na batalha)
+    for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) {
+      const c = design.crew[y][x]; if (!c) continue;
+      const [cx, cy] = cellXY(x, y);
+      ctx.save(); ctx.translate(cx, cy); drawCrew(ctx, c, CELL, true); ctx.restore();
     }
 
     // pré-visualização
@@ -177,7 +186,7 @@ const Builder = (() => {
           if (t.layer === 'top') { drawBase(ctx, design.hull[y][x], CELL, {}); drawTop(ctx, t.part, CELL); }
           else { const code = t.layer === 'fin' ? finFor(design, t.part, x, y) : t.part; drawBase(ctx, code, CELL, {}); }
           ctx.globalAlpha = 1;
-        }
+        } else if (!why && t.crew) { ctx.globalAlpha = 0.75; drawCrew(ctx, t.crew, CELL, true); ctx.globalAlpha = 1; }
         ctx.lineWidth = 2; ctx.strokeStyle = why ? '#ff5d5d' : (t.eraser ? '#ffb347' : '#3ecf8e');
         ctx.strokeRect(-CELL / 2 + 1, -CELL / 2 + 1, CELL - 2, CELL - 2);
         ctx.restore();
@@ -234,6 +243,7 @@ const Builder = (() => {
         if (isBridge(h)) h = '#';
         design.hull[y][mx] = h === '<' ? '>' : h === '>' ? '<' : h;
         design.top[y][mx] = design.top[y][x];
+        design.crew[y][mx] = design.crew[y][x];
       }
     }
     sanitize(design); changed();
@@ -266,6 +276,10 @@ const Builder = (() => {
         c2.translate(22, 22);
         if (t.eraser) {
           c2.fillStyle = '#e8eef5'; c2.font = '26px sans-serif'; c2.textAlign = 'center'; c2.textBaseline = 'middle'; c2.fillText('🧽', 0, 1);
+        } else if (t.crew) {
+          const cr = CREW[t.crew];
+          c2.fillStyle = 'rgba(18,28,40,.9)'; c2.strokeStyle = cr.col; c2.lineWidth = 2.5; c2.beginPath(); c2.arc(0, 0, 16, 0, Math.PI * 2); c2.fill(); c2.stroke();
+          c2.fillStyle = '#fff'; c2.font = '20px "Segoe UI Emoji","Segoe UI",sans-serif'; c2.textAlign = 'center'; c2.textBaseline = 'middle'; c2.fillText(cr.icon, 0, 2);
         } else {
           const sz = 34;
           if (t.layer === 'top') drawBase(c2, '#', sz, {});
@@ -319,7 +333,7 @@ const Builder = (() => {
       try {
         const d = JSON.parse(atob(code.trim()));
         if (!d.hull || !d.top || d.hull.length !== GRID_H || d.hull[0].length !== GRID_W) throw new Error();
-        pushUndo(); design = d; sanitize(design); changed();
+        pushUndo(); design = normalizeDesign(d); sanitize(design); changed();
       } catch (e) { alert('Código inválido.'); }
     };
     window.addEventListener('keydown', e => {

@@ -64,6 +64,7 @@ function renderStats(r) {
       ['🚀', s.torps, 'Torpedos'], ['🎇', s.missiles, 'Mísseis'], ['⚙', s.engines, 'Motores'],
       ['◣', s.lat, 'Aletas laterais'], ['▼', s.rear, 'Aletas traseiras'], ['✚', s.repairs, 'Reparos'],
       ['🛡', s.shields, 'Escudos'], ['📡', s.pd, 'Defesa pontual'], ['💨', s.thrusters, 'Propulsores laterais'],
+      ['🗡', s.melee, 'Armas corpo a corpo'], ['🛩', s.hangars, 'Hangares de drone'], ['🚰', s.pumps, 'Bombas de esgoto'], ['🧯', s.sprinklers, 'Anti-incêndio'], ['👥', s.crewCount, 'Grupos de tripulação'],
     ].filter(c => c[1] > 0).map(c => `<span title="${c[2]}">${c[0]} ${c[1]}</span>`).join('')}</div>`;
   $('messages').innerHTML =
     r.errors.map(m => `<div class="msg err">⛔ ${m}</div>`).join('') +

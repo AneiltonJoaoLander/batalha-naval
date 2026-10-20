@@ -260,3 +260,10 @@ body.touch .host-btn { left: 62px; top: 10px; }
 .hp-row input[type=text] { flex: 1; min-width: 140px; }
 .hp-pl { display: flex; align-items: center; gap: 8px; padding: 5px 8px; background: #0c2038; border-radius: 8px; margin-bottom: 4px; font-size: .85rem; }
 .hp-pl span { flex: 1; }
+
+/* v1.8: avarias e tripulação no HUD */
+.fire-line { font-size: .8rem; color: #ffb36b; margin: 2px 0 6px; font-weight: 700; }
+.crew-line { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 6px; }
+.crew-line:empty { display: none; }
+.crew-chip { background: rgba(18,28,40,.85); border: 1px solid var(--line); border-radius: 10px; padding: 1px 7px; font-size: .75rem; }
+.crew-chip.off { border-color: #8a4a4a; color: #ffb0a0; opacity: .8; }

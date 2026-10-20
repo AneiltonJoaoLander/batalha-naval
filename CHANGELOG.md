@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.8.0 — combate de perto, alagamento, fogo, drones e tripulação
+- **Armas de corpo a corpo:** Espinhos, Serra Giratória, Aríete, Gancho de Abordagem (reduz a velocidade do alvo) e Bobina de Choque (atordoa peças).
+- **Cascos e blindagens:** Casco Cerâmico, de Titânio, Compartimentado (vaza menos), Flutuante (aguenta mais água), Corta-fogo, e placas de convés (Aço e Reativa).
+- **Alagamento:** o casco rompido deixa entrar água; ao encher o navio afunda, e a água o deixa mais lento. Novas peças: Bomba de Esgoto e Sistema Anti-Incêndio. Submarinos alagados não seguram a profundidade.
+- **Fogo:** chance de incêndio ao atingir uma peça; as chamas causam dano, se espalham e podem detonar munição. Cascos corta-fogo resistem.
+- **Drones (hangares):** Reconhecimento (visão extra), Ataque (bombas) e Suicida (explode no alvo). Podem ser derrubados por metralhadoras e defesa pontual; os bots também os usam. Novo preset **Porta-drones**, além de Abordador e Titã.
+- **Tripulação:** nova camada no estaleiro com círculos invisíveis para o inimigo. Cada grupo dá um bônus (recarga, motores, reparo/vazamentos, incêndio, giro, sensores, abordagem) e o perde se a peça sob ele for danificada ou destruída.
+- **Online:** água, fogo e drones são sincronizados; o servidor não envia a tripulação do projeto aos inimigos e valida os novos campos.
+- Observação: a v1.7 foi os controles do anfitrião; os drones de reconhecimento também ampliam a névoa de guerra no online.
+
 ## v1.7.0 — controles do anfitrião
 **No lobby (regras da sala)**
 - **Jogadores máx.** (2–8), **tempo de reaparecimento** (1–15 s), **tamanho da arena** (pequena/média/grande), **névoa de guerra** liga/desliga e **fogo amigo** (equipes).

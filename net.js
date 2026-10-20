@@ -381,7 +381,12 @@ const Online = {
   buildSnap(pl) {
     const m = { t: 'snap', x: +pl.x.toFixed(1), y: +pl.y.toFixed(1), a: +pl.ang.toFixed(3), vx: +pl.vx.toFixed(1), vy: +pl.vy.toFixed(1),
       fl: +pl.flame.toFixed(2), sh: +pl.shield.toFixed(1), v: pl.vision, sp: pl.sonar, pr: pl.pingR, sg: +pl.sig.toFixed(3),
-      dp: +pl.depth.toFixed(2), qt: +pl.quiet.toFixed(2) };
+      dp: +pl.depth.toFixed(2), qt: +pl.quiet.toFixed(2), wt: +pl.wet.toFixed(2) };
+    const fi = [];
+    pl.order.forEach((k, i) => { const cell = pl.cells.get(k); if (cell && cell.fire > 0) fi.push(i); });
+    if (fi.length) m.fi = fi;
+    const dr = Battle.drones.filter(d => d.owner === pl && !d.dead).map(d => [Math.round(d.x), Math.round(d.y), +d.ang.toFixed(2), d.kind, +d.hp.toFixed(1), d.vision]);
+    if (dr.length) m.dr = dr;
     if (this.snapN % 4 === 1) {
       const c = [];
       for (const k of pl.order) { const cell = pl.cells.get(k); if (!cell) c.push(-1, -1); else c.push(+cell.hp.toFixed(1), cell.top ? +cell.top.hp.toFixed(1) : -1); }

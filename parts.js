@@ -9,7 +9,7 @@
    A proa (frente) do navio aponta para CIMA da grade.
    ===================================================================== */
 
-const VERSION = '1.7.0';
+const VERSION = '1.8.0';
 const GRID_W = 13;
 const GRID_H = 17;
 const BASE_BUDGET = 220;
@@ -29,7 +29,7 @@ const VISION_BASE = 650;
 const STEALTH_FULL = 0.6;
 const REVEAL_NEAR = 170;
 
-const HULL_CODES = new Set(['#', '=', 'o', '@', '%', 's', 'B', 'b', 'U']);
+const HULL_CODES = new Set(['#', '=', 'o', '@', '%', 's', '1', '2', '3', '4', '5', 'B', 'b', 'U']);
 const isHull = c => HULL_CODES.has(c);
 const isBridge = c => c === 'B' || c === 'b' || c === 'U';
 const DEEP = 0.6;                                   // profundidade (0..1) a partir da qual o submarino está submerso
@@ -37,6 +37,18 @@ const isFin = c => c === '<' || c === '>' || c === 'v';
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 /** diferença de ângulo a-b normalizada para [-PI, PI] */
 const angDiff = (a, b) => ((a - b + Math.PI) % TAU + TAU) % TAU - Math.PI;
+
+/* ------------------------------------------------------------- tripulação */
+/** Grupos de pessoas (camada invisível ao inimigo). Dão bônus; se a célula que os abriga quebra, o bônus se perde. */
+const CREW = {
+  g: { name: 'Artilheiros', cost: 8, icon: '🎯', col: '#f5b942', desc: '+20% de cadência em todas as armas (o 2º grupo rende metade).' },
+  m: { name: 'Maquinistas', cost: 8, icon: '⚙', col: '#9aa7b5', desc: '+15% de força nos motores.' },
+  r: { name: 'Equipe de Avarias', cost: 8, icon: '🔧', col: '#4cc9ff', desc: 'Remenda furos (menos alagamento) e conserta lentamente as peças do navio.' },
+  b: { name: 'Bombeiros', cost: 8, icon: '🧯', col: '#ff6a4d', desc: 'Apagam incêndios 3× mais rápido e seguram a propagação do fogo.' },
+  t: { name: 'Timoneiros', cost: 8, icon: '🧭', col: '#7bd86a', desc: '+25% na velocidade de giro do navio.' },
+  s: { name: 'Operadores de Sensores', cost: 8, icon: '📡', col: '#a87cff', desc: '+25% de alcance de visão, radar e sonar.' },
+  f: { name: 'Fuzileiros', cost: 8, icon: '🗡', col: '#e8c46a', desc: '+40% de dano das armas de corpo a corpo e resistência a choque elétrico.' },
+};
 
 /* ---------------------------------------------------------------- peças */
 const PARTS = {
@@ -54,6 +66,16 @@ const PARTS = {
     desc: 'Casco absorvedor de radar e ruído. Com cobertura furtiva suficiente (60% do casco) o navio some do mapa, do sonar e dos mísseis.' },
   'B': { layer: 'hull', name: 'Ponte de Comando', cost: 10, hp: 16, mass: 1.5, soak: 0,
     desc: 'Obrigatória (só pode haver uma ponte). Se for destruída, o navio afunda. Proteja-a no meio do casco! Troque por uma Torre Submarina para criar um submarino.' },
+  '1': { layer: 'hull', name: 'Casco Cerâmico', cost: 8, hp: 9, mass: 2, soak: 0.9, blast: 1.5,
+    desc: 'Placas cerâmicas: quase imunes a metralhadoras (reduz 0,9 de cada tiro), mas racham com explosões (+50% de dano de torpedo, míssil e morteiro).' },
+  '2': { layer: 'hull', name: 'Casco de Titânio', cost: 14, hp: 18, mass: 1.5, soak: 0.35,
+    desc: 'Resistente e leve: o dobro da vida do casco comum com bem menos peso que a blindagem pesada.' },
+  '3': { layer: 'hull', name: 'Casco Compartimentado', cost: 6, hp: 8, mass: 1.4, soak: 0.15, bulkhead: true,
+    desc: 'Antepara estanque: quando uma peça ao lado é destruída, entra 60% menos água (alagamento).' },
+  '4': { layer: 'hull', name: 'Casco Flutuante', cost: 3, hp: 4, mass: 0.4, float: true,
+    desc: 'Núcleo de espuma: levíssimo e aumenta a flutuação, então o navio aguenta mais água antes de afundar.' },
+  '5': { layer: 'hull', name: 'Casco Corta-fogo', cost: 7, hp: 8, mass: 1.6, soak: 0.2, fireproof: true,
+    desc: 'Revestimento retardante: nunca pega fogo e impede que o fogo passe por ele.' },
   'U': { layer: 'hull', name: 'Torre Submarina', cost: 32, hp: 22, mass: 2.2, soak: 0.3, sub: true,
     desc: 'Troque a ponte por esta torre e o navio vira SUBMARINO: tecla V (ou botão ⬇) mergulha. Submerso ele some da vista, só leva torpedos/minas/cargas e só atira torpedos e minas. Gasta bateria (recarrega na superfície).' },
   'b': { layer: 'hull', name: 'Ponte Blindada', cost: 22, hp: 34, mass: 3, soak: 0.4,
@@ -146,6 +168,30 @@ const PARTS = {
   'g': { layer: 'top', kind: 'depth', name: 'Cargas de Profundidade', cost: 28, hp: 2, mass: 1.4,
     dmg: 14, dmgSurf: 4, reload: 3.5, speed: 200, range: 380, minRange: 40, splash: 64,
     desc: 'Lança cargas no ponto do cursor que explodem no fundo: devastadoras contra submarinos submersos, fracas contra navios. (Botão esquerdo)' },
+  '&': { layer: 'top', kind: 'plate', name: 'Placa de Aço', cost: 8, hp: 14, mass: 2.4, soak: 0.3,
+    desc: 'Blindagem de convés: absorve os tiros antes do casco (reduz 0,3 de cada um). Ocupa o lugar de uma arma.' },
+  '$': { layer: 'top', kind: 'plate', name: 'Placa Reativa', cost: 12, hp: 10, mass: 1.8, soak: 0.2, blast: 0.4,
+    desc: 'Absorve explosões: recebe só 40% do dano de torpedos, mísseis, morteiros e minas.' },
+  '+': { layer: 'top', kind: 'melee', mkind: 'spike', name: 'Espinhos', cost: 6, hp: 6, mass: 1, dmg: 2.5, tick: 0.3,
+    desc: 'Corpo a corpo: fere qualquer inimigo que encoste (e quem você abalroar). Barato.' },
+  '^': { layer: 'top', kind: 'melee', mkind: 'saw', name: 'Serra Giratória', cost: 22, hp: 5, mass: 1.5, dmg: 1.6, tick: 0.15,
+    desc: 'Disco de corte: cerca de 10 de dano por segundo em quem estiver encostado.' },
+  '!': { layer: 'top', kind: 'melee', mkind: 'ram', name: 'Aríete', cost: 18, hp: 14, mass: 3.5, soak: 0.5, dmg: 0.12, tick: 1.5,
+    desc: 'Esporão de proa: no choque o dano cresce com a velocidade (até 20). Ponha na proa e acelere contra o inimigo!' },
+  '~': { layer: 'top', kind: 'melee', mkind: 'hook', name: 'Gancho de Abordagem', cost: 14, hp: 5, mass: 1.2, dmg: 0.6, tick: 0.5,
+    desc: 'Prende o inimigo: depois do contato ele fica 50% mais lento por 4 s e é puxado para você.' },
+  '?': { layer: 'top', kind: 'melee', mkind: 'shock', name: 'Bobina de Choque', cost: 20, hp: 4, mass: 1.2, dmg: 0.8, tick: 0.5,
+    desc: 'Descarga elétrica: dano baixo, mas atordoa por 4 s a tripulação inimiga (ela perde as funções) e drena o escudo.' },
+  '0': { layer: 'top', kind: 'pump', name: 'Bomba de Esgoto', cost: 14, hp: 3, mass: 1.5, rate: 1.4,
+    desc: 'Bombeia para fora a água que entra no navio (1,4 por segundo cada). Essencial contra alagamento.' },
+  '*': { layer: 'top', kind: 'sprinkler', name: 'Sistema Anti-Incêndio', cost: 16, hp: 3, mass: 1.2, range: 3,
+    desc: 'Apaga automaticamente os incêndios das peças em até 3 células.' },
+  'I': { layer: 'top', kind: 'hangar', drone: 'recon', name: 'Drone de Reconhecimento', cost: 30, hp: 4, mass: 2.4, relaunch: 15, speed: 200, dhp: 5, fuel: 70, vision: 420,
+    desc: 'Hangar de drone: voa até o cursor (no máximo 800 do navio) e amplia a sua visão (o drone enxerga 420). Metralhadoras inimigas o derrubam.' },
+  'O': { layer: 'top', kind: 'hangar', drone: 'attack', name: 'Drone de Ataque', cost: 38, hp: 4, mass: 2.6, relaunch: 18, speed: 230, dhp: 6, fuel: 28, vision: 220, bomb: { dmg: 3, splash: 26, every: 1.4 },
+    desc: 'Voa até inimigos detectados e joga bombas. Volta ao hangar quando o combustível acaba; se for abatido, demora para relançar.' },
+  'P': { layer: 'top', kind: 'hangar', drone: 'kamikaze', name: 'Drone Suicida', cost: 26, hp: 3, mass: 2, relaunch: 12, speed: 290, dhp: 3, fuel: 14, vision: 200, boom: { dmg: 9, splash: 34 },
+    desc: 'Lançado com Espaço/botão direito: mergulha no inimigo detectado mais próximo e explode.' },
   'A': { layer: 'top', kind: 'radar', name: 'Radar', cost: 22, hp: 2, mass: 1, bonus: 300,
     desc: 'Aumenta o alcance de visão normal em 300 (até 2 radares). Não enxerga navios furtivos.' },
   'S': { layer: 'top', kind: 'sonar', name: 'Sonar Passivo', cost: 28, hp: 2, mass: 1.2, range: 850,
@@ -171,7 +217,14 @@ const TOOLS = [
   { key: '=', part: '=', group: 'Casco' },
   { key: '%', part: '%', group: 'Casco' },
   { key: '@', part: '@', group: 'Casco' },
+  { key: '1', part: '1', group: 'Casco' },
+  { key: '2', part: '2', group: 'Casco' },
+  { key: '3', part: '3', group: 'Casco' },
+  { key: '4', part: '4', group: 'Casco' },
+  { key: '5', part: '5', group: 'Casco' },
   { key: 's', part: 's', group: 'Casco' },
+  { key: '&', part: '&', group: 'Blindagem de convés' },
+  { key: '$', part: '$', group: 'Blindagem de convés' },
   { key: 'B', part: 'B', group: 'Ponte' },
   { key: 'b', part: 'b', group: 'Ponte' },
   { key: 'U', part: 'U', group: 'Ponte' },
@@ -187,12 +240,20 @@ const TOOLS = [
   { key: 'q', part: 'q', group: 'Metralhadoras' },
   { key: 'k', part: 'k', group: 'Metralhadoras' },
   { key: 'f', part: 'f', group: 'Metralhadoras' },
+  { key: '+', part: '+', group: 'Corpo a corpo' },
+  { key: '^', part: '^', group: 'Corpo a corpo' },
+  { key: '!', part: '!', group: 'Corpo a corpo' },
+  { key: '~', part: '~', group: 'Corpo a corpo' },
+  { key: '?', part: '?', group: 'Corpo a corpo' },
   { key: 't', part: 't', group: 'Torpedos e mísseis' },
   { key: 'a', part: 'a', group: 'Torpedos e mísseis' },
   { key: 'i', part: 'i', group: 'Torpedos e mísseis' },
   { key: 'l', part: 'l', group: 'Torpedos e mísseis' },
   { key: 'y', part: 'y', group: 'Torpedos e mísseis' },
   { key: 'u', part: 'u', group: 'Torpedos e mísseis' },
+  { key: 'I', part: 'I', group: 'Drones' },
+  { key: 'O', part: 'O', group: 'Drones' },
+  { key: 'P', part: 'P', group: 'Drones' },
   { key: 'e', part: 'e', group: 'Propulsão' },
   { key: 'E', part: 'E', group: 'Propulsão' },
   { key: 'W', part: 'W', group: 'Propulsão' },
@@ -206,20 +267,30 @@ const TOOLS = [
   { key: 'z', part: 'z', group: 'Submarino' },
   { key: 'h', part: 'h', group: 'Submarino' },
   { key: 'g', part: 'g', group: 'Submarino' },
+  { key: '0', part: '0', group: 'Controle de avarias' },
+  { key: '*', part: '*', group: 'Controle de avarias' },
+  { key: 'r', part: 'r', group: 'Controle de avarias' },
   { key: 'A', part: 'A', group: 'Sensores e furtividade' },
   { key: 'S', part: 'S', group: 'Sensores e furtividade' },
   { key: 'Y', part: 'Y', group: 'Sensores e furtividade' },
   { key: 'Q', part: 'Q', group: 'Sensores e furtividade' },
-  { key: 'r', part: 'r', group: 'Apoio' },
   { key: 'G', part: 'G', group: 'Apoio' },
   { key: 'D', part: 'D', group: 'Apoio' },
   { key: 'J', part: 'J', group: 'Apoio' },
   { key: 'Z', part: 'Z', group: 'Apoio' },
   { key: 'X', part: 'X', group: 'Apoio' },
+  { key: 'K:g', crew: 'g', group: 'Tripulação (invisível ao inimigo)' },
+  { key: 'K:m', crew: 'm', group: 'Tripulação (invisível ao inimigo)' },
+  { key: 'K:r', crew: 'r', group: 'Tripulação (invisível ao inimigo)' },
+  { key: 'K:b', crew: 'b', group: 'Tripulação (invisível ao inimigo)' },
+  { key: 'K:t', crew: 't', group: 'Tripulação (invisível ao inimigo)' },
+  { key: 'K:s', crew: 's', group: 'Tripulação (invisível ao inimigo)' },
+  { key: 'K:f', crew: 'f', group: 'Tripulação (invisível ao inimigo)' },
   { key: 'x', part: null, group: 'Ferramentas', eraser: true, name: 'Borracha', cost: 0,
-    desc: 'Apaga a peça de cima; se não houver, apaga o casco. Botão direito apaga tudo na célula.' },
+    desc: 'Apaga a peça de cima; depois a tripulação; depois o casco. Botão direito apaga tudo na célula.' },
 ];
 for (const t of TOOLS) {
+  if (t.crew) { const c = CREW[t.crew]; t.name = c.name; t.cost = c.cost; t.desc = c.desc + ' Fica escondida dos inimigos.'; t.layer = 'crew'; }
   if (t.part) { const p = PARTS[t.part]; t.name = p.name; t.cost = p.cost; t.desc = p.desc; t.layer = p.layer; }
 }
 
@@ -230,13 +301,17 @@ function shipStats(cells) {
     cannons: 0, mortars: 0, mgs: 0, torps: 0, missiles: 0, engines: 0, repairs: 0,
     shields: 0, shield: 0, regen: 0, pd: 0, thrusters: 0, dps: 0,
     radars: 0, sonars: 0, sonarR: 0, pings: 0, pingR: 0, jammers: 0, loaders: 0, fcs: 0, stealthW: 0, hullCount: 0,
-    sub: false, periscopes: 0, ballast: 0, batteries: 0, mines: 0, depths: 0, thrustSub: 0, silentThrust: 0, nuclear: false, turnBonus: 0 };
+    sub: false, periscopes: 0, ballast: 0, batteries: 0, mines: 0, depths: 0, thrustSub: 0, silentThrust: 0, nuclear: false, turnBonus: 0,
+    melee: 0, meleeKinds: {}, pumps: 0, sprinklers: 0, hangars: 0, droneKinds: {}, floats: 0, bulkheads: 0, crew: {}, crewCount: 0 };
   for (const c of cells) {
     const b = PARTS[c.base];
     s.mass += b.mass; s.hp += b.hp; s.cost += b.cost; s.count++;
     if (b.fin === 'lateral') s.lat++; else if (b.fin === 'rear') s.rear++;
     if (isHull(c.base)) { s.hullCount++; s.stealthW += b.stealth || 0; }
     if (b.sub) s.sub = true;
+    if (b.float) s.floats++;
+    if (b.bulkhead) s.bulkheads++;
+    if (c.crew && CREW[c.crew]) { s.cost += CREW[c.crew].cost; s.crew[c.crew] = (s.crew[c.crew] || 0) + 1; s.crewCount++; }
     if (!c.top) continue;
     const t = PARTS[c.top];
     s.mass += t.mass; s.hp += t.hp; s.cost += t.cost;
@@ -267,11 +342,15 @@ function shipStats(cells) {
       case 'battery': s.batteries++; break;
       case 'mine': s.mines++; s.dps += t.dmg / t.reload * 0.4; break;
       case 'depth': s.depths++; s.dps += t.dmg / t.reload * 0.3; break;
+      case 'melee': s.melee++; s.meleeKinds[t.mkind] = (s.meleeKinds[t.mkind] || 0) + 1; s.dps += { spike: 4, saw: 9, ram: 5, hook: 1.5, shock: 2 }[t.mkind] || 0; break;
+      case 'pump': s.pumps++; break;
+      case 'sprinkler': s.sprinklers++; break;
+      case 'hangar': s.hangars++; s.droneKinds[t.drone] = (s.droneKinds[t.drone] || 0) + 1; s.dps += t.drone === 'attack' ? 4 : t.drone === 'kamikaze' ? 3 : 0; break;
       case 'repair': s.repairs++; break;
     }
   }
   const m = Math.max(s.mass, 1);
-  s.weapons = s.cannons + s.mortars + s.mgs + s.torps + s.missiles + s.mines + s.depths;
+  s.weapons = s.cannons + s.mortars + s.mgs + s.torps + s.missiles + s.mines + s.depths + s.melee + (s.droneKinds.attack || 0) + (s.droneKinds.kamikaze || 0);
   s.maxSpeed = Math.min(300, s.thrust / m * 45);          // px/s
   s.accel = s.maxSpeed * 0.25;                             // arrasto longitudinal = 0.25/s
   s.turn = (0.55 + 0.28 * s.lat + 0.5 * s.rear + 0.3 * s.thrusters + s.turnBonus) * clamp(Math.sqrt(25 / m), 0.45, 1.4); // rad/s
@@ -308,14 +387,19 @@ function detects(o, t) {
 }
 
 /* ------------------------------------------------------------- projetos */
-function emptyDesign() {
-  const mk = () => Array.from({ length: GRID_H }, () => Array(GRID_W).fill(''));
-  return { hull: mk(), top: mk() };
+const emptyGrid = () => Array.from({ length: GRID_H }, () => Array(GRID_W).fill(''));
+function emptyDesign() { return { hull: emptyGrid(), top: emptyGrid(), crew: emptyGrid() }; }
+function cloneDesign(d) { return { hull: d.hull.map(r => r.slice()), top: d.top.map(r => r.slice()), crew: (d.crew || emptyGrid()).map(r => r.slice()) }; }
+/** garante que projetos antigos (sem tripulação) tenham a camada */
+function normalizeDesign(d) {
+  if (!d.crew || d.crew.length !== GRID_H) d.crew = emptyGrid();
+  return d;
 }
-function cloneDesign(d) { return { hull: d.hull.map(r => r.slice()), top: d.top.map(r => r.slice()) }; }
+/** versão sem a tripulação (o inimigo não pode ver onde ela fica) */
+function stripCrew(d) { return { hull: d.hull, top: d.top }; }
 
 /** monta um projeto a partir de linhas de texto, centralizado na grade */
-function makeDesign(hullRows, topRows) {
+function makeDesign(hullRows, topRows, crewRows) {
   const d = emptyDesign();
   const w = hullRows[0].length, h = hullRows.length;
   const ox = Math.floor((GRID_W - w) / 2), oy = Math.floor((GRID_H - h) / 2);
@@ -323,6 +407,7 @@ function makeDesign(hullRows, topRows) {
     const a = hullRows[y][x], b = topRows[y][x];
     if (a !== ' ') d.hull[oy + y][ox + x] = a;
     if (b !== ' ') d.top[oy + y][ox + x] = b;
+    if (crewRows && crewRows[y][x] !== ' ') d.crew[oy + y][ox + x] = crewRows[y][x];
   }
   return d;
 }
@@ -346,6 +431,16 @@ function validateDesign(d, budget, rules) {
         if (h === '<' && !isHull(at(x + 1, y))) return { ok: false, error: 'Aleta solta.' };
         if (h === '>' && !isHull(at(x - 1, y))) return { ok: false, error: 'Aleta solta.' };
         if (h === 'v' && !isHull(at(x, y - 1))) return { ok: false, error: 'Aleta solta.' };
+      }
+    }
+    if (d.crew !== undefined) {
+      if (!Array.isArray(d.crew) || d.crew.length !== GRID_H) return { ok: false, error: 'Tripulação inválida.' };
+      for (let y = 0; y < GRID_H; y++) {
+        if (!Array.isArray(d.crew[y]) || d.crew[y].length !== GRID_W) return { ok: false, error: 'Tripulação inválida.' };
+        for (let x = 0; x < GRID_W; x++) {
+          const c = d.crew[y][x];
+          if (c && (typeof c !== 'string' || !CREW[c] || !isHull(d.hull[y][x]))) return { ok: false, error: 'Tripulação em posição inválida.' };
+        }
       }
     }
     if (bridges !== 1) return { ok: false, error: 'O navio precisa de exatamente uma ponte.' };
@@ -381,7 +476,7 @@ function validateDesign(d, budget, rules) {
 function designCells(d) {
   const out = [];
   for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) {
-    if (d.hull[y][x]) out.push({ base: d.hull[y][x], top: d.top[y][x] || null });
+    if (d.hull[y][x]) out.push({ base: d.hull[y][x], top: d.top[y][x] || null, crew: (d.crew && d.crew[y][x]) || null });
   }
   return out;
 }
@@ -840,9 +935,109 @@ const PRESETS = [
     '   V   ',
     '       ',
   ]) },
+
+  { id: 'abordador', name: 'Abordador', power: 3, minWave: 3, role: 'Aríete, serras, espinhos e ganchos: parte para o corpo a corpo.', design: makeDesign([
+    '   2   ',
+    '  ###  ',
+    ' ##B## ',
+    '<#####>',
+    ' ##### ',
+    ' ##### ',
+    '  ###  ',
+    '  v v  ',
+  ], [
+    '   !   ',
+    '  ^ ^  ',
+    '       ',
+    ' +   + ',
+    ' ~   ~ ',
+    '  e e  ',
+    '   E   ',
+    '       ',
+  ]) },
+  { id: 'portadrones', name: 'Porta-drones', power: 7, minWave: 8, role: 'Lança drones de reconhecimento, ataque e suicidas.', design: makeDesign([
+    '    #    ',
+    '   ###   ',
+    '  #####  ',
+    '  #####  ',
+    ' ###B### ',
+    '<#######>',
+    ' ####### ',
+    ' ####### ',
+    '<#######>',
+    ' ####### ',
+    '  #####  ',
+    '  #####  ',
+    '  v v v  ',
+  ], [
+    '    D    ',
+    '   I O   ',
+    '  O   P  ',
+    '    *    ',
+    '         ',
+    '  D   D  ',
+    '    0    ',
+    '  m   m  ',
+    '    r    ',
+    '  e e e  ',
+    '  E   E  ',
+    '    0    ',
+    '         ',
+  ]) },
+  { id: 'titan', name: 'Titã', power: 9, minWave: 11, role: 'Casco de titânio, antepara e corta-fogo: difícil de afundar.', design: makeDesign([
+    '    2    ',
+    '   222   ',
+    '  22B22  ',
+    ' 2222222 ',
+    '<2222222>',
+    ' 2255522 ',
+    ' 2255522 ',
+    '<3333333>',
+    ' 3333333 ',
+    '  44444  ',
+    '  v v v  ',
+  ], [
+    '    !    ',
+    '   ^&^   ',
+    '         ',
+    '  C   C  ',
+    ' +     + ',
+    '   & &   ',
+    '   &0&   ',
+    ' m  *  m ',
+    ' e  W  e ',
+    '  j   j  ',
+    '         ',
+  ]) },
 ];
 
 PRESETS.sort((a, b) => a.power - b.power);
+
+/** coloca grupos de tripulação em células protegidas (perto do centro) dos modelos prontos */
+function autoCrew(d, types) {
+  const cells = []; let sx = 0, sy = 0;
+  for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) if (isHull(d.hull[y][x])) { cells.push({ x, y }); sx += x; sy += y; }
+  const cx = sx / cells.length, cy = sy / cells.length;
+  const hasHull = (x, y) => y >= 0 && y < GRID_H && x >= 0 && x < GRID_W && isHull(d.hull[y][x]);
+  const inner = cells.filter(c => [[1, 0], [-1, 0], [0, 1], [0, -1]].every(([dx, dy]) => hasHull(c.x + dx, c.y + dy)));
+  const pool = (inner.length >= types.length * 2 ? inner : cells).slice()
+    .sort((a, b) => Math.hypot(a.x - cx, a.y - cy) - Math.hypot(b.x - cx, b.y - cy) || a.y - b.y || a.x - b.x);
+  const used = [];
+  for (const t of types) {
+    const pick = pool.find(c => !used.includes(c) && !isBridge(d.hull[c.y][c.x]) && used.every(u => Math.abs(u.x - c.x) + Math.abs(u.y - c.y) >= 3))
+      || pool.find(c => !used.includes(c) && !isBridge(d.hull[c.y][c.x]));
+    if (!pick) break;
+    d.crew[pick.y][pick.x] = t; used.push(pick);
+  }
+}
+const PRESET_CREW = {
+  corveta: ['r'], canhoneira: ['g', 'r'], catamara: ['t', 'r'], barcaca: ['g', 'r'], fragata: ['g', 'r'], destroier: ['g', 'r', 't'],
+  sentinela: ['s', 's', 'r'], monitor: ['r', 'b', 'm', 'g'], cruzador: ['g', 'r', 'b', 's'], encouracado: ['g', 'r', 'b', 'm'],
+  dreadnought: ['g', 'g', 'r', 'r', 'b', 'm', 't', 's'], cacasub: ['r', 's'], nuclear: ['r', 'b', 'm', 's'],
+  abordador: ['f', 'f', 'r'], portadrones: ['s', 'r', 'b'], titan: ['r', 'b', 'm', 'f'],
+};
+for (const p of PRESETS) if (PRESET_CREW[p.id]) autoCrew(p.design, PRESET_CREW[p.id]);
+
 
 /* --------------------------------------------------------------- progresso */
 const Meta = {
@@ -863,7 +1058,7 @@ const Meta = {
         if (+b.startWave >= 1 && +b.startWave <= 30) this.bots.startWave = +b.startWave | 0;
         if (b.skirmish && typeof b.skirmish === 'object') this.bots.skirmish = b.skirmish;
       }
-      if (j.design && j.design.hull && j.design.top) this.design = j.design;
+      if (j.design && j.design.hull && j.design.top) this.design = normalizeDesign(j.design);
     } catch (e) { /* sem storage: segue sem salvar */ }
   },
   reset() {
@@ -934,6 +1129,41 @@ function drawBase(ctx, code, cs, o = {}) {
       ctx.beginPath();
       for (let i = 1; i < 4; i++) { const y = -h + i * cs / 4; ctx.moveTo(-h + 1.5, y); ctx.lineTo(h - 1.5, y); }
       ctx.stroke();
+      break;
+    case '1':
+      ctx.fillStyle = '#6d6a63'; ctx.fillRect(-h, -h, cs, cs);
+      ctx.fillStyle = '#e9e4d8'; ctx.fillRect(-h + 1.5, -h + 1.5, cs - 3, cs - 3);
+      ctx.strokeStyle = 'rgba(120,110,95,.6)'; ctx.lineWidth = 1;
+      for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) ctx.strokeRect(-h + 3 + i * (cs - 6) / 2, -h + 3 + j * (cs - 6) / 2, (cs - 6) / 2, (cs - 6) / 2);
+      break;
+    case '2': {
+      ctx.fillStyle = '#1b2733'; ctx.fillRect(-h, -h, cs, cs);
+      const g2 = ctx.createLinearGradient(-h, -h, h, h); g2.addColorStop(0, '#c5d6e8'); g2.addColorStop(0.5, '#8aa3bb'); g2.addColorStop(1, '#b7cadc');
+      ctx.fillStyle = g2; ctx.fillRect(-h + 1.5, -h + 1.5, cs - 3, cs - 3);
+      ctx.strokeStyle = 'rgba(40,60,80,.35)'; ctx.lineWidth = 1;
+      for (let i = 1; i < 5; i++) { ctx.beginPath(); ctx.moveTo(-h + 2, -h + i * cs / 5); ctx.lineTo(h - 2, -h + i * cs / 5); ctx.stroke(); }
+      break;
+    }
+    case '3':
+      ctx.fillStyle = '#2a2f36'; ctx.fillRect(-h, -h, cs, cs);
+      ctx.fillStyle = '#7d8793'; ctx.fillRect(-h + 1.5, -h + 1.5, cs - 3, cs - 3);
+      ctx.fillStyle = '#e3b93c';
+      for (let i = 0; i < 4; i++) { ctx.fillRect(-h + 2 + i * (cs - 4) / 4, -h + 2, (cs - 4) / 8, 3); ctx.fillRect(-h + 2 + i * (cs - 4) / 4, h - 5, (cs - 4) / 8, 3); }
+      ctx.fillStyle = '#323943'; ctx.fillRect(-1.5, -h + 6, 3, cs - 12); ctx.fillRect(-h + 6, -1.5, cs - 12, 3);
+      break;
+    case '4':
+      ctx.fillStyle = '#8c3b18'; ctx.fillRect(-h, -h, cs, cs);
+      ctx.fillStyle = '#f2a04a'; ctx.fillRect(-h + 1.5, -h + 1.5, cs - 3, cs - 3);
+      ctx.strokeStyle = '#fff2dc'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(0, 0, cs * 0.26, 0, TAU); ctx.stroke();
+      ctx.strokeStyle = '#d9541e'; ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.arc(0, 0, cs * 0.26, 0, TAU); ctx.stroke(); ctx.setLineDash([]);
+      break;
+    case '5':
+      ctx.fillStyle = '#3a1713'; ctx.fillRect(-h, -h, cs, cs);
+      ctx.fillStyle = '#7a3a30'; ctx.fillRect(-h + 1.5, -h + 1.5, cs - 3, cs - 3);
+      ctx.fillStyle = 'rgba(255,255,255,.55)';
+      for (const [px, py] of [[-0.3, -0.3], [0.3, -0.3], [-0.3, 0.3], [0.3, 0.3]]) { ctx.beginPath(); ctx.arc(px * cs, py * cs, 1.8, 0, TAU); ctx.fill(); }
+      ctx.fillStyle = '#ffb347'; poly(ctx, [[0, -cs * 0.2], [cs * 0.12, 0], [0, cs * 0.18], [-cs * 0.12, 0]]); ctx.fill();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.arc(0, 0, cs * 0.24, 0, TAU); ctx.moveTo(-cs * 0.17, cs * 0.17); ctx.lineTo(cs * 0.17, -cs * 0.17); ctx.stroke();
       break;
     case 's':
       ctx.fillStyle = '#121418'; ctx.fillRect(-h, -h, cs, cs);
@@ -1163,6 +1393,73 @@ function drawTop(ctx, code, cs, o = {}) {
       }
       break;
     }
+    case '&':
+      ctx.fillStyle = '#1b2027'; ctx.fillRect(-cs * 0.44, -cs * 0.44, cs * 0.88, cs * 0.88);
+      ctx.fillStyle = '#6a7686'; ctx.fillRect(-cs * 0.4, -cs * 0.4, cs * 0.8, cs * 0.8);
+      ctx.fillStyle = '#8795a8'; ctx.fillRect(-cs * 0.4, -cs * 0.4, cs * 0.8, cs * 0.14);
+      rivets(ctx, cs * 0.3, Math.max(1.2, cs * 0.05), '#2a313b');
+      break;
+    case '$':
+      ctx.fillStyle = '#3a2a1e'; ctx.fillRect(-cs * 0.44, -cs * 0.44, cs * 0.88, cs * 0.88);
+      ctx.fillStyle = '#c98a4a';
+      for (const sx of [-1, 1]) for (const sy of [-1, 1]) ctx.fillRect(sx > 0 ? cs * 0.02 : -cs * 0.4, sy > 0 ? cs * 0.02 : -cs * 0.4, cs * 0.38, cs * 0.38);
+      ctx.strokeStyle = '#e8503a'; ctx.lineWidth = 1.4; ctx.strokeRect(-cs * 0.4, -cs * 0.4, cs * 0.8, cs * 0.8);
+      break;
+    case '+':
+      ctx.fillStyle = '#9aa3ad'; ctx.strokeStyle = '#2b3138'; ctx.lineWidth = 1;
+      for (const [px, py, pa] of [[0, -0.28, 0], [0.28, 0, Math.PI / 2], [0, 0.28, Math.PI], [-0.28, 0, -Math.PI / 2], [0.2, -0.2, Math.PI / 4], [-0.2, -0.2, -Math.PI / 4], [0.2, 0.2, 3 * Math.PI / 4], [-0.2, 0.2, -3 * Math.PI / 4]]) {
+        ctx.save(); ctx.translate(px * cs, py * cs); ctx.rotate(pa); poly(ctx, [[-cs * 0.07, 0], [cs * 0.07, 0], [0, -cs * 0.2]]); ctx.fill(); ctx.stroke(); ctx.restore();
+      }
+      ctx.fillStyle = '#4d565f'; ctx.beginPath(); ctx.arc(0, 0, cs * 0.16, 0, TAU); ctx.fill();
+      break;
+    case '^':
+      ctx.save(); ctx.rotate((o.time || 0) * 9);
+      ctx.fillStyle = '#c9d1da'; ctx.strokeStyle = '#2b3138'; ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let i = 0; i < 16; i++) { const rr0 = i % 2 ? cs * 0.28 : cs * 0.4, an = i * TAU / 16; ctx.lineTo(Math.cos(an) * rr0, Math.sin(an) * rr0); }
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#39424c'; ctx.beginPath(); ctx.arc(0, 0, cs * 0.12, 0, TAU); ctx.fill();
+      ctx.restore();
+      break;
+    case '!':
+      poly(ctx, [[-cs * 0.3, cs * 0.4], [cs * 0.3, cs * 0.4], [cs * 0.22, -cs * 0.1], [0, -cs * 0.5], [-cs * 0.22, -cs * 0.1]]);
+      ctx.fillStyle = '#6b7482'; ctx.fill(); ctx.strokeStyle = '#1e242b'; ctx.lineWidth = 1.6; ctx.stroke();
+      poly(ctx, [[0, -cs * 0.5], [cs * 0.22, -cs * 0.1], [0, -cs * 0.05], [-cs * 0.22, -cs * 0.1]]); ctx.fillStyle = '#c0392b'; ctx.fill();
+      break;
+    case '~':
+      ctx.strokeStyle = '#8b939c'; ctx.lineWidth = 2.2; ctx.beginPath(); ctx.moveTo(0, cs * 0.35); ctx.lineTo(0, -cs * 0.1); ctx.stroke();
+      ctx.strokeStyle = '#dfe5ea'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(0, -cs * 0.22, cs * 0.18, Math.PI * 0.9, Math.PI * 2.1); ctx.stroke();
+      ctx.fillStyle = '#dfe5ea'; poly(ctx, [[cs * 0.18, -cs * 0.3], [cs * 0.3, -cs * 0.2], [cs * 0.14, -cs * 0.14]]); ctx.fill();
+      ctx.fillStyle = '#4d565f'; ctx.beginPath(); ctx.arc(0, cs * 0.32, cs * 0.1, 0, TAU); ctx.fill();
+      break;
+    case '?': {
+      const t = o.time || 0;
+      ctx.fillStyle = '#1a2a3a'; ctx.strokeStyle = '#4cc9ff'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(0, 0, cs * 0.3, 0, TAU); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = 'rgba(190,240,255,.9)'; ctx.lineWidth = 1.4;
+      for (let i = 0; i < 3; i++) {
+        ctx.beginPath(); let px = -cs * 0.2, py = (i - 1) * cs * 0.1; ctx.moveTo(px, py);
+        for (let k = 1; k <= 4; k++) { px += cs * 0.1; py = (i - 1) * cs * 0.1 + (k % 2 ? 1 : -1) * cs * 0.05 * Math.sin(t * 20 + i + k); ctx.lineTo(px, py); }
+        ctx.stroke();
+      }
+      break;
+    }
+    case '0':
+      ctx.fillStyle = '#173246'; ctx.strokeStyle = '#4cc9ff'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(0, 0, cs * 0.34, 0, TAU); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#7fd8ff'; ctx.beginPath(); ctx.moveTo(0, -cs * 0.22); ctx.quadraticCurveTo(cs * 0.2, cs * 0.02, 0, cs * 0.2); ctx.quadraticCurveTo(-cs * 0.2, cs * 0.02, 0, -cs * 0.22); ctx.fill();
+      break;
+    case '*':
+      ctx.fillStyle = '#7a1d1d'; ctx.strokeStyle = '#1a0a0a'; ctx.lineWidth = 1.3; ctx.beginPath(); ctx.arc(0, cs * 0.1, cs * 0.26, 0, TAU); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#d9d9d9'; ctx.fillRect(-cs * 0.05, -cs * 0.3, cs * 0.1, cs * 0.2);
+      ctx.strokeStyle = 'rgba(150,220,255,.8)'; ctx.lineWidth = 1.3;
+      for (const an of [-0.6, 0, 0.6]) { ctx.beginPath(); ctx.moveTo(0, -cs * 0.3); ctx.lineTo(Math.sin(an) * cs * 0.28, -cs * 0.3 - Math.cos(an) * cs * 0.14); ctx.stroke(); }
+      break;
+    case 'I': case 'O': case 'P':
+      ctx.fillStyle = '#262c33'; ctx.fillRect(-cs * 0.42, -cs * 0.42, cs * 0.84, cs * 0.84);
+      ctx.strokeStyle = '#e3c25a'; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.arc(0, 0, cs * 0.32, 0, TAU); ctx.stroke();
+      ctx.fillStyle = '#e3c25a'; ctx.fillRect(-cs * 0.14, -cs * 0.18, cs * 0.06, cs * 0.36); ctx.fillRect(cs * 0.08, -cs * 0.18, cs * 0.06, cs * 0.36); ctx.fillRect(-cs * 0.12, -cs * 0.03, cs * 0.24, cs * 0.06);
+      ctx.fillStyle = o.out ? '#3a3f46' : code === 'I' ? '#4cc9ff' : code === 'O' ? '#e8503a' : '#ffa53c'; ctx.beginPath(); ctx.arc(cs * 0.3, -cs * 0.3, cs * 0.09, 0, TAU); ctx.fill();
+      if (o.out) { ctx.strokeStyle = 'rgba(227,194,90,.35)'; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.arc(0, 0, cs * 0.32, 0, TAU); ctx.stroke(); ctx.setLineDash([]); }
+      break;
     case 'A': {
       const a = (o.time || 0) * 3;
       ctx.fillStyle = '#4a5360'; ctx.strokeStyle = '#1a1f26'; ctx.lineWidth = 1.4;
@@ -1291,6 +1588,21 @@ function drawTop(ctx, code, cs, o = {}) {
 
 /* o servidor (Node) reaproveita as regras: peças, estatísticas, detecção e validação */
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { BOT_DIFFS, VERSION, DEEP, GRID_W, GRID_H, BASE_BUDGET, VISION_BASE, REVEAL_NEAR, PARTS, PRESETS, shipStats, designCells,
+  module.exports = { CREW, normalizeDesign, stripCrew, BOT_DIFFS, VERSION, DEEP, GRID_W, GRID_H, BASE_BUDGET, VISION_BASE, REVEAL_NEAR, PARTS, PRESETS, shipStats, designCells,
     validateDesign, detects, isHull, isBridge, isFin, clamp };
 }
+
+/** círculo de tripulação (canto da célula). Só o dono e os aliados veem; para o inimigo é invisível. */
+function drawCrew(ctx, code, cs, active) {
+  const c = CREW[code];
+  if (!c) return;
+  ctx.save();
+  ctx.globalAlpha = active === false ? 0.4 : 0.92;
+  ctx.fillStyle = active === false ? 'rgba(90,25,25,.75)' : 'rgba(18,28,40,.78)';
+  ctx.strokeStyle = active === false ? '#8a4a4a' : c.col; ctx.lineWidth = 1.6;
+  ctx.beginPath(); ctx.arc(cs * 0.28, cs * 0.28, cs * 0.2, 0, TAU); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#fff'; ctx.font = Math.round(cs * 0.24) + 'px "Segoe UI Emoji","Segoe UI",sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(c.icon, cs * 0.28, cs * 0.3);
+  ctx.restore();
+}
+
